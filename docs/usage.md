@@ -114,6 +114,10 @@ The rendered markdown view (`v`) understands some Obsidian-flavored markdown tha
 not, by rewriting the note before it is rendered. These apply to any markdown note; the source view
 (cycle to it with `v`) always shows the file untouched.
 
+- **Properties panel.** A note's YAML frontmatter (the `--- … ---` block at the top) renders as a
+  clean **Properties** table above the body — `tags` / `aliases` as chips, URLs as links — instead
+  of being hidden. Press **`p`** to show / hide it, like Obsidian (shown by default). With it hidden,
+  the frontmatter is suppressed entirely and only the body renders.
 - **Callouts.** A `> [!note]`, `> [!warning]`, `> [!tip]`, `> [!important]` … block renders as a
   titled, bordered box rather than a literal `[!note]` blockquote. A custom title after the type is
   kept (`> [!warning] Heads up`), and a foldable marker (`> [!note]-` / `+`) shows a `▸` / `▾`

@@ -32,6 +32,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// How long the input poll blocks each tick before draining finished off-thread renders, so
@@ -74,6 +75,13 @@ pub fn run() -> io::Result<()> {
         crate::media::MediaCapability::default()
     };
 
+    // The shared frontmatter-Properties-panel flag (the `p` toggle). Shown by default (like
+    // Obsidian). The live Content Renderer reads it on the worker thread when rendering markdown;
+    // the controller flips it and re-renders. One clone goes into the render factory, one to the
+    // controller below.
+    let properties_shown = Arc::new(AtomicBool::new(true));
+    let factory_properties = Arc::clone(&properties_shown);
+
     // The root-bound providers are built by a factory so a later re-root rebuilds them against
     // the new root (ADR-0004). Non-capturing — it reads the passed `Resolved`, so re-root gets
     // the new root's git/renderer rather than closing over the launch root.
@@ -95,6 +103,7 @@ pub fn run() -> io::Result<()> {
                 caps,
                 media_preview,
                 media_cap,
+                show_properties: Arc::clone(&factory_properties),
             });
             RootProviders { git, content }
         });
@@ -211,6 +220,8 @@ pub fn run() -> io::Result<()> {
             }),
         );
     }
+    // Share the Properties-panel flag with the controller so the `p` key flips it and re-renders.
+    controller.set_properties_toggle(Arc::clone(&properties_shown));
 
     let mut terminal = ratatui::try_init()?;
     // Mouse is additive to the keyboard-first design (AC-18): herdr forwards mouse events to a
@@ -463,6 +474,9 @@ struct LiveContent {
     /// The detected terminal graphics capability, for the placeholder's "inline preview available"
     /// line. Empty when `media_preview` is off.
     media_cap: crate::media::MediaCapability,
+    /// The shared frontmatter-Properties-panel flag (the `p` toggle), read on this worker thread
+    /// when rendering markdown. Shown by default; flipped by the controller.
+    show_properties: Arc<AtomicBool>,
 }
 
 /// Apply a text transform to a [`Prepared`]'s content, preserving the variant (a `Binary`
@@ -481,13 +495,15 @@ fn map_prepared_text(prepared: Prepared, f: impl Fn(&str) -> String) -> Prepared
 
 impl LiveContent {
     /// The Obsidian markdown transforms applied to a note's source before glow renders it (the
-    /// rendered-markdown view only): rewrite callouts (`> [!note]`) into titled blockquotes, and
-    /// task-list markers (`- [ ]` / `- [x]`) into `☐` / `☑` glyphs. Rendering only — the read-only
-    /// viewer never writes a toggled checkbox back to the file (constitution §1). Pure over the
-    /// prepared text; a binary/placeholder passes through.
+    /// rendered-markdown view only): prepend a frontmatter **Properties** table when the `p` panel
+    /// is shown (else hide the frontmatter), rewrite callouts (`> [!note]`) into titled
+    /// blockquotes, and task-list markers (`- [ ]` / `- [x]`) into `☐` / `☑` glyphs. Rendering only
+    /// — the read-only viewer never writes a toggled checkbox back to the file (constitution §1).
+    /// Pure over the prepared text; a binary/placeholder passes through.
     fn transform_markdown(&self, prepared: Prepared) -> Prepared {
-        map_prepared_text(prepared, |t| {
-            crate::mdnote::transform_tasks(&crate::mdnote::transform_callouts(t))
+        let show_properties = self.show_properties.load(Ordering::Relaxed);
+        map_prepared_text(prepared, move |t| {
+            crate::mdnote::preprocess(t, show_properties)
         })
     }
 
@@ -1469,6 +1485,7 @@ mod tests {
             caps: Caps::default(),
             media_preview: false,
             media_cap: crate::media::MediaCapability::default(),
+            show_properties: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -1497,6 +1514,7 @@ mod tests {
             },
             media_preview: false,
             media_cap: crate::media::MediaCapability::default(),
+            show_properties: Arc::new(AtomicBool::new(true)),
         };
         let out = content.render_at_width(&file, ViewMode::SyntaxContent, None, None);
         assert!(
@@ -1528,6 +1546,7 @@ mod tests {
             caps: Caps::default(),
             media_preview: true,
             media_cap: crate::media::MediaCapability::default(), // no protocol, no backend
+            show_properties: Arc::new(AtomicBool::new(true)),
         };
         let out = content.render_at_width(&img, ViewMode::SyntaxContent, None, None);
         let text: String = out
@@ -1556,6 +1575,7 @@ mod tests {
             caps: Caps::default(),
             media_preview: false,
             media_cap: crate::media::MediaCapability::default(),
+            show_properties: Arc::new(AtomicBool::new(true)),
         };
         let out = off.render_at_width(&img, ViewMode::SyntaxContent, None, None);
         let text: String = out
@@ -1599,6 +1619,7 @@ mod tests {
             caps: Caps::default(),
             media_preview: false,
             media_cap: crate::media::MediaCapability::default(),
+            show_properties: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -1620,6 +1641,51 @@ mod tests {
             flatten_content(&raw).contains("[!warning]"),
             "the source view shows the untransformed note"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rendered_markdown_shows_and_hides_the_properties_panel() {
+        let root = tmp("md-props");
+        let md = root.join("note.md");
+        std::fs::write(
+            &md,
+            "---\ntitle: Hello\ntags: [alpha, beta]\n---\n# Body\ntext\n",
+        )
+        .unwrap();
+        let flag = Arc::new(AtomicBool::new(true));
+        let content = LiveContent {
+            root: root.clone(),
+            renderers: Renderers {
+                markdown: vec!["cat".into()],
+                diff: vec!["cat".into()],
+                full_diff: vec!["cat".into()],
+                syntax: vec!["cat".into()],
+                timeout: Duration::from_secs(5),
+            },
+            caps: Caps::default(),
+            media_preview: false,
+            media_cap: crate::media::MediaCapability::default(),
+            show_properties: flag.clone(),
+        };
+        // Shown (default): a Properties table with the title + tag chips is prepended above the body.
+        let on =
+            flatten_content(&content.render_at_width(&md, ViewMode::RenderedMarkdown, None, None));
+        assert!(on.contains("Properties"), "the panel is shown: {on}");
+        assert!(on.contains("Hello"), "title value shown");
+        assert!(
+            on.contains("#alpha") && on.contains("#beta"),
+            "tag chips shown"
+        );
+        assert!(on.contains("# Body"), "body still rendered");
+        // Hidden (toggled off): no Properties table, frontmatter suppressed, body intact.
+        flag.store(false, Ordering::Relaxed);
+        let off =
+            flatten_content(&content.render_at_width(&md, ViewMode::RenderedMarkdown, None, None));
+        assert!(!off.contains("Properties"), "the panel is hidden: {off}");
+        assert!(!off.contains("title:"), "raw frontmatter stays hidden");
+        assert!(off.contains("# Body"), "body still rendered when hidden");
         let _ = std::fs::remove_dir_all(&root);
     }
 

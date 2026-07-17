@@ -30,6 +30,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -9909,6 +9910,43 @@ fn e_falls_back_to_editor_for_a_non_markdown_file_in_a_vault() {
         "a non-markdown file in a vault still uses the editor"
     );
     assert!(log.borrow().uris.is_empty());
+}
+
+// ---- Feature: frontmatter Properties panel toggle (`p`) ----------------------------------
+
+#[test]
+fn toggle_properties_flips_the_shared_panel_flag() {
+    // `p` flips the shared show-properties flag the live renderer reads; wired via
+    // `set_properties_toggle`. Starts shown (like Obsidian): `p` hides, `p` again shows.
+    let dir = TempDir::new();
+    std::fs::write(dir.path().join("note.md"), "---\ntitle: X\n---\n# Body\n").unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    let flag = Arc::new(AtomicBool::new(true));
+    ctrl.set_properties_toggle(flag.clone());
+
+    let fx = ctrl.handle(Intent::ToggleProperties);
+    assert!(fx.redraw, "toggling the panel redraws");
+    assert!(
+        !flag.load(Ordering::Relaxed),
+        "`p` hides the Properties panel"
+    );
+    assert!(
+        ctrl.notices().iter().any(|n| n.contains("hidden")),
+        "a notice reflects the new state"
+    );
+
+    ctrl.handle(Intent::ToggleProperties);
+    assert!(flag.load(Ordering::Relaxed), "`p` again shows it");
+}
+
+#[test]
+fn toggle_properties_is_inert_when_not_wired() {
+    // With no toggle injected (a bare test controller) `p` is a harmless no-op, never a panic.
+    let dir = TempDir::new();
+    std::fs::write(dir.path().join("a.md"), "x").unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    let fx = ctrl.handle(Intent::ToggleProperties);
+    assert!(!fx.quit, "an unwired toggle does not end the session");
 }
 
 // ---- Feature: capability-gated inline media preview --------------------------------------

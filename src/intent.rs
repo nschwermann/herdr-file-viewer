@@ -84,6 +84,11 @@ pub enum Intent {
     /// Hide the tree so the content pane fills the frame / restore the two-column layout — a
     /// pure layout toggle for reading a file full-screen.
     ToggleZoom,
+    /// Show/hide the frontmatter **Properties** panel at the top of the rendered markdown view
+    /// (`p`), like Obsidian. Read-only — it only re-renders the current note with or without the
+    /// prepended properties table; it never touches the file (AC-N1). No-op outside a rendered
+    /// markdown note.
+    ToggleProperties,
     /// Re-read git state (working-tree status + changed-set) and re-render, so the viewer picks
     /// up changes made outside it — a merge, pull, or commit in another pane. Read-only.
     Refresh,
@@ -154,7 +159,7 @@ pub enum Intent {
 impl Intent {
     /// Every intent variant — lets the dispatcher and tests enumerate the closed set so
     /// keyboard-completeness (AC-18) and the no-file/git-mutation invariant (AC-N3) stay checkable.
-    pub const ALL: [Intent; 39] = [
+    pub const ALL: [Intent; 40] = [
         Intent::NavUp,
         Intent::NavDown,
         Intent::Expand,
@@ -179,6 +184,7 @@ impl Intent {
         Intent::GrowTree,
         Intent::ToggleWrap,
         Intent::ToggleZoom,
+        Intent::ToggleProperties,
         Intent::Refresh,
         Intent::DismissUpdate,
         Intent::SwitchWorktree,
@@ -233,6 +239,7 @@ mod tests {
                 | Intent::GrowTree
                 | Intent::ToggleWrap
                 | Intent::ToggleZoom
+                | Intent::ToggleProperties
                 | Intent::Refresh
                 | Intent::DismissUpdate
                 | Intent::SwitchWorktree
@@ -320,11 +327,11 @@ mod tests {
     }
 
     #[test]
-    fn all_length_is_39() {
+    fn all_length_is_40() {
         assert_eq!(
             Intent::ALL.len(),
-            39,
-            "Intent::ALL must have exactly 39 variants after adding the wikilink-navigation intents"
+            40,
+            "Intent::ALL must have exactly 40 variants after adding ToggleProperties"
         );
     }
 

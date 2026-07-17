@@ -311,6 +311,13 @@ pub(crate) const REGISTRY: &[Binding] = &[
         category: "View & layout",
     },
     Binding {
+        intent: Intent::ToggleProperties,
+        name: "toggle_properties",
+        default_keys: &[KeyCode::Char('p')],
+        description: "Show or hide the frontmatter Properties panel in rendered markdown.",
+        category: "View & layout",
+    },
+    Binding {
         intent: Intent::Refresh,
         name: "refresh",
         default_keys: &[KeyCode::Char('r')],
@@ -743,6 +750,7 @@ mod tests {
         (KeyCode::Char('>'), Intent::GrowTree),
         (KeyCode::Char('w'), Intent::ToggleWrap),
         (KeyCode::Char('z'), Intent::ToggleZoom),
+        (KeyCode::Char('p'), Intent::ToggleProperties),
         (KeyCode::Char('r'), Intent::Refresh),
         (KeyCode::Char('u'), Intent::DismissUpdate),
         (KeyCode::Char('?'), Intent::ShowHelp),

@@ -60,6 +60,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
@@ -582,6 +583,11 @@ pub struct Controller {
     /// The read-only media-preview seam (suspend/paint/resume over the terminal). `None` in tests
     /// and when `media_preview` is off; injected via [`set_media_viewer`](Self::set_media_viewer).
     media_viewer: Option<Box<dyn crate::media::MediaViewer>>,
+    /// The shared "show the frontmatter Properties panel" flag (the `p` toggle). Shared with the
+    /// live Content Renderer (which reads it on the worker thread when rendering markdown), so a
+    /// flip + re-render shows/hides the panel. `None` in tests that never wire it (then `p` is an
+    /// inert notice). Injected via [`set_properties_toggle`](Self::set_properties_toggle).
+    properties_shown: Option<Arc<AtomicBool>>,
     clipboard: Box<dyn Clipboard>,
     /// The provider factory (ADR-0004), kept so a re-root can rebuild the root-bound providers
     /// (Git Service + Content Renderer) against the new root.
@@ -799,6 +805,7 @@ impl Controller {
             neovim_editor: None,
             media_cap: crate::media::MediaCapability::default(),
             media_viewer: None,
+            properties_shown: None,
             clipboard,
             providers,
             renderers,
@@ -1212,6 +1219,13 @@ impl Controller {
     ) {
         self.media_cap = cap;
         self.media_viewer = Some(viewer);
+    }
+
+    /// Inject the shared frontmatter-Properties-panel flag (the `p` toggle). Shared with the live
+    /// Content Renderer so a flip + re-render shows/hides the panel. Post-construction, like
+    /// [`set_media_viewer`](Self::set_media_viewer).
+    pub fn set_properties_toggle(&mut self, shown: Arc<AtomicBool>) {
+        self.properties_shown = Some(shown);
     }
 
     /// Install the effective key bindings resolved from the registry + the config's `[keys]` table,
@@ -1656,6 +1670,7 @@ impl Controller {
             Intent::GrowTree => self.resize_split(SPLIT_STEP as i16),
             Intent::ToggleWrap => self.toggle_wrap(),
             Intent::ToggleZoom => self.toggle_zoom(),
+            Intent::ToggleProperties => self.toggle_properties(),
             Intent::Refresh => self.refresh(),
             Intent::DismissUpdate => self.dismiss_update(),
             Intent::SwitchWorktree => self.open_worktree_picker(),
@@ -2306,6 +2321,28 @@ impl Controller {
             // it too, so the two-column split never reappears inside a still-full-screen host pane.
             self.leave_host_zoom();
         }
+        Effects::redraw()
+    }
+
+    /// `p`: flip the shared frontmatter Properties-panel flag and re-render the current file so the
+    /// panel appears/disappears in the rendered markdown view. Read-only — only the render changes,
+    /// never the file. Inert (a no-op) when the toggle was never wired (tests). The flag is flipped
+    /// *before* the re-dispatch, so the render worker reads the new value.
+    fn toggle_properties(&mut self) -> Effects {
+        let Some(flag) = self.properties_shown.clone() else {
+            return Effects::noop();
+        };
+        let now = !flag.load(Ordering::Relaxed);
+        flag.store(now, Ordering::Relaxed);
+        self.action_notice = Some(
+            if now {
+                "Properties panel: shown"
+            } else {
+                "Properties panel: hidden"
+            }
+            .into(),
+        );
+        self.dispatch_render();
         Effects::redraw()
     }
 
