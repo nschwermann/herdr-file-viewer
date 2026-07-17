@@ -70,6 +70,23 @@ pub fn opener_argv(os: OsKind, action: OpenAction, path: &Path) -> Vec<OsString>
     }
 }
 
+/// Build the per-OS argv to hand a **URI** (e.g. `obsidian://open?...`) to the OS default
+/// handler: `open <uri>` on macOS, `xdg-open <uri>` on Linux, Explorer on Windows. The URI is a
+/// single argv element, never shell-split, so its query string stays literal. Unlike
+/// [`opener_argv`], this deliberately ignores any user `open` override — that override is for
+/// *files*, and pointing an image viewer at an `obsidian://` URI would fail; a URI must reach the
+/// system's protocol handler.
+pub fn uri_open_argv(os: OsKind, uri: &str) -> Vec<OsString> {
+    match os {
+        OsKind::Mac => vec![OsString::from("open"), OsString::from(uri)],
+        OsKind::Linux => vec![OsString::from("xdg-open"), OsString::from(uri)],
+        OsKind::Windows => vec![
+            windows_explorer_program(system_root().as_deref()),
+            OsString::from(uri),
+        ],
+    }
+}
+
 /// A short display label for the built-in OS opener (no concrete path), used by the Settings
 /// help tab when `open` / `reveal` are unset. Mirrors [`opener_argv`]'s program (+ fixed flags).
 pub fn default_opener_display(os: OsKind, action: OpenAction) -> String {
@@ -133,6 +150,9 @@ pub trait Opener {
     fn open(&mut self, path: &Path) -> OpenerOutcome;
     /// Reveal `path` in the OS file manager (non-blocking). (AC-2)
     fn reveal(&mut self, path: &Path) -> OpenerOutcome;
+    /// Hand a `uri` (e.g. `obsidian://open?...`) to the OS default protocol handler
+    /// (non-blocking). Always uses the per-OS system opener, never a user file override.
+    fn open_uri(&mut self, uri: &str) -> OpenerOutcome;
 }
 
 /// The concrete [`Opener`]: builds the per-OS argv via [`opener_argv`] and hands it to the
@@ -206,6 +226,15 @@ impl Opener for CommandOpener {
 
     fn reveal(&mut self, path: &Path) -> OpenerOutcome {
         self.run(OpenAction::Reveal, path)
+    }
+
+    fn open_uri(&mut self, uri: &str) -> OpenerOutcome {
+        let argv = uri_open_argv(self.os, uri);
+        match self.spawner.spawn(&argv) {
+            Ok(()) => OpenerOutcome::Launched,
+            Err(SpawnError::NotLaunched(e)) => OpenerOutcome::NotLaunched(e.to_string()),
+            Err(SpawnError::NonZeroExit(d)) => OpenerOutcome::NonZeroExit(d),
+        }
     }
 }
 
@@ -294,6 +323,40 @@ mod tests {
             calls[0],
             vec![OsString::from("xdg-open"), OsString::from("/a")]
         );
+    }
+
+    #[test]
+    fn command_opener_open_uri_uses_system_handler_not_the_file_override() {
+        // A configured `open` override is for FILES; a URI must still reach the OS protocol
+        // handler (`open`/`xdg-open`), so open_uri ignores the override and passes the URI as one
+        // literal argv element.
+        let (recorder, calls) = RecordingSpawner::new(SpawnResult::Ok);
+        let mut opener = CommandOpener::new(OsKind::Mac, Box::new(recorder))
+            .with_overrides(Some(vec![OsString::from("eog")]), None);
+        let uri = "obsidian://open?vault=My%20Vault&file=Note";
+        assert_eq!(opener.open_uri(uri), OpenerOutcome::Launched);
+        assert_eq!(
+            calls.borrow()[0],
+            vec![OsString::from("open"), OsString::from(uri)],
+            "the URI goes to the system opener as one literal arg, not the `eog` file override",
+        );
+    }
+
+    #[test]
+    fn uri_open_argv_per_os() {
+        let uri = "obsidian://open?vault=V&file=N";
+        assert_eq!(
+            uri_open_argv(OsKind::Mac, uri),
+            vec![OsString::from("open"), OsString::from(uri)]
+        );
+        assert_eq!(
+            uri_open_argv(OsKind::Linux, uri),
+            vec![OsString::from("xdg-open"), OsString::from(uri)]
+        );
+        // Windows: the resolved Explorer program + the URI as one element.
+        let win = uri_open_argv(OsKind::Windows, uri);
+        assert_eq!(win.len(), 2);
+        assert_eq!(win[1], OsString::from(uri));
     }
 
     #[test]

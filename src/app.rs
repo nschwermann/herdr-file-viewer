@@ -116,6 +116,9 @@ pub fn run() -> io::Result<()> {
     // Apply the config-driven quit guard (`confirm_discard`): whether quitting with
     // session annotations held confirms first or discards them immediately.
     controller.apply_confirm_discard(eff.confirm_discard);
+    // Apply the config-driven `obsidian_editor` switch: whether `e` opens a vault `.md` in
+    // Obsidian instead of the editor.
+    controller.apply_obsidian_editor(eff.obsidian_editor);
     // Apply the config-driven mouse-wheel scroll step (`scroll_lines`); already clamped to >= 1 by
     // the resolver, so the wheel always advances at least one line/item.
     controller.apply_scroll_lines(eff.scroll_lines);

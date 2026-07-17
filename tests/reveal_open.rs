@@ -132,6 +132,9 @@ impl Opener for FakeOpener {
         self.log.borrow_mut().revealed.push(path.to_path_buf());
         self.outcome()
     }
+    fn open_uri(&mut self, _uri: &str) -> OpenerOutcome {
+        self.outcome()
+    }
 }
 
 // ── controller builder (a small local mirror of lineselect's) ────────────────────────────────

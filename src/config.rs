@@ -118,6 +118,11 @@ pub struct Config {
     pub reveal: Option<String>,
     pub hide_dotfiles: Option<bool>,
     pub update_check: Option<bool>,
+    /// Whether the `e` key opens a markdown file that lives inside an Obsidian vault in Obsidian
+    /// (via the `obsidian://open` URI) instead of the configured editor. `None` falls back to
+    /// `true`. Only affects `.md` files under a directory whose ancestor holds a `.obsidian/`
+    /// folder; every other file and directory uses the editor hand-off unchanged.
+    pub obsidian_editor: Option<bool>,
     /// Whether quitting with unexported session annotations confirms first. `None` falls back to
     /// `true`: annotations are session-only, so quitting destroys them, and the confirm is the only
     /// thing standing between a stray `q` and losing the batch. Set `false` to quit immediately and
@@ -267,6 +272,9 @@ pub struct EffectiveSettings {
     pub reveal: Option<Vec<String>>,
     pub hide_dotfiles: bool,
     pub update_check: bool,
+    /// The effective **open-vault-markdown-in-Obsidian** switch: the config `obsidian_editor` when
+    /// present, else `true`. Config-or-default (no env var).
+    pub obsidian_editor: bool,
     /// The effective **confirm-before-discarding-annotations** switch: the config
     /// `confirm_discard` when present, else `true`. Config-or-default (no env var).
     pub confirm_discard: bool,
@@ -339,6 +347,10 @@ pub fn resolve(config: &Config, get_env: impl Fn(&str) -> Option<String>) -> Eff
         .map(crate::editor::tokenize_command);
 
     let hide_dotfiles = config.hide_dotfiles.unwrap_or(false);
+
+    // Config > default; no env var. Defaults ON: a vault `.md` opens in Obsidian, every other file
+    // still uses the editor hand-off.
+    let obsidian_editor = config.obsidian_editor.unwrap_or(true);
 
     // Config > default; no env var. Defaults ON: the confirm only fires when annotations are held,
     // so a session that never annotates never sees it, and the one that does has work to lose.
@@ -414,6 +426,7 @@ pub fn resolve(config: &Config, get_env: impl Fn(&str) -> Option<String>) -> Eff
         reveal,
         hide_dotfiles,
         update_check,
+        obsidian_editor,
         confirm_discard,
         scroll_lines,
         tree_width,

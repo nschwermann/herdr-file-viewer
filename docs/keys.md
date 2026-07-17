@@ -23,7 +23,7 @@ is additive and on by default.
 | `c` | Toggle changed-files-only |
 | `b` | Toggle the diff baseline (base branch ⇄ `HEAD`) |
 | `v` | Cycle the content view mode |
-| `e` | Open the selected file in `$EDITOR` (see [Opening in an editor](#opening-in-an-editor)) |
+| `e` | Open the selected file in `$EDITOR` — **or in Obsidian** when it is a `.md` inside an Obsidian vault (see [Opening in an editor](#opening-in-an-editor)) |
 | `O` (Shift+`o`) | **Open with default app**: hand the selected file or directory to the OS default application (e.g. an image opens in the system viewer). Read-only hand-off; non-blocking (the viewer keeps running) |
 | `R` (Shift+`r`) | **Reveal in file manager**: open the OS file manager (Finder / Explorer / a Linux file manager) with the selected entry highlighted where supported, so you can drag it out (e.g. into Slack). Read-only hand-off |
 | `f` | **Go to file**: open a fuzzy finder over every file in the tree; type to filter, `↑` / `↓` move, `Enter` opens the selected file, `Esc` cancels (`←` / `→` scroll long paths) |
@@ -135,8 +135,17 @@ The mouse-wheel step is configurable — see [`scroll_lines`](configuration.md).
 ## Opening in an editor
 
 `e` opens the selected file in an external editor; the viewer suspends, runs the editor, and resumes
-when it exits. The viewer never edits a file itself. Choose the editor two ways — the config key is
-the reliable one:
+when it exits. The viewer never edits a file itself.
+
+**Obsidian vault notes.** When the selected file is a markdown note that lives inside an
+[Obsidian vault](https://help.obsidian.md/vault) — any directory whose ancestor holds a `.obsidian/`
+folder — `e` instead opens it **in Obsidian** (via the `obsidian://open?vault=…&file=…` URI, handed
+to the OS the same non-blocking way as `O`), so the note opens in your graph rather than a bare text
+editor. Every other file, every directory, and any `.md` outside a vault use the editor hand-off
+below. Turn this off with `obsidian_editor = false` in [config](configuration.md) to always use the
+editor. To always open the file in a terminal editor regardless, use **`n`** (open in neovim).
+
+Choose the editor two ways — the config key is the reliable one:
 
 - **Recommended: set `editor` in [config.toml](configuration.md)** (e.g. `editor = "code --wait"`,
   or `"vim"`). It takes precedence over `$EDITOR` and sidesteps the server-environment gotcha below

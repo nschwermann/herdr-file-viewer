@@ -47,6 +47,7 @@ fn config_example_documents_every_config_key() {
         "reveal",
         "hide_dotfiles",
         "update_check",
+        "obsidian_editor",
         "confirm_discard",
         "scroll_lines",
         "tree_width",

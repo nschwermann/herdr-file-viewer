@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries are short on purpose; follow the
 `→` links for the full detail.
 
+## [Unreleased]
+
+### Added
+- `e` on a markdown note inside an Obsidian vault (an ancestor holds `.obsidian/`) opens it in Obsidian via the `obsidian://open` URI instead of the editor; toggle with `obsidian_editor = false`. Every other file and directory uses the editor hand-off unchanged. → [keys](docs/keys.md#opening-in-an-editor)
+
 ## [1.13.0] - 2026-07-16
 
 ### Added

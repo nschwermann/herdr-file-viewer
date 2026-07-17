@@ -39,9 +39,9 @@ normal case — every key falls back to its default.
 A config key always wins. Only two keys also have an environment-variable fallback tier below the
 config key and above the built-in default — `editor` (`$EDITOR`) and `update_check`
 (`$HERDR_FILE_VIEWER_NO_UPDATE_CHECK`) — giving those two a `config > env > default` chain. Every
-other key (`markdown`, `diff`, `syntax`, `open`, `reveal`, `hide_dotfiles`, `confirm_discard`,
-`scroll_lines`, `tree_width`, `tree_position`, `tree_max_cols`, `preview_max_lines`,
-`preview_max_kib`) has no
+other key (`markdown`, `diff`, `syntax`, `open`, `reveal`, `hide_dotfiles`,
+`obsidian_editor`, `confirm_discard`, `scroll_lines`, `tree_width`, `tree_position`,
+`tree_max_cols`, `preview_max_lines`, `preview_max_kib`) has no
 applicable environment variable; for those it's `config > default` only.
 
 ## Keys
@@ -59,6 +59,7 @@ open = "xdg-open"           # override the `O` open-with / `R` reveal-in-file-ma
 reveal = "nautilus"
 
 hide_dotfiles = false       # true to hide dotfiles at startup (the `.` key still toggles)
+obsidian_editor = true      # `e` opens a vault .md in Obsidian (false = always use the editor)
 update_check = true         # false to disable the once-a-day update check
 confirm_discard = true      # false to discard annotations without confirming (on quit / worktree switch)
 scroll_lines = 3            # mouse-wheel step (content/search/help), a 1 to 10 scale: 1 slow · 3 medium · 6 fast · 10 max
@@ -92,6 +93,14 @@ either to view bigger files (`preview_max_lines` up to `100000`, `preview_max_ki
 One caveat for **diffs**: a diff is additionally bounded at ~4 MB by the git-capture step, independent
 of `preview_max_kib`. So raising `preview_max_kib` above ~4 MB widens how much *file content* is shown
 but not how much of a very large *diff* is (a diff past that bound is shown up to ~4 MB).
+
+`obsidian_editor` decides what `e` does for a markdown note that lives inside an **Obsidian vault**
+— a directory whose ancestor contains a `.obsidian/` folder. When on (the default), pressing `e` on
+such a `.md` opens it in Obsidian via the `obsidian://open?vault=…&file=…` URI (handed to the OS the
+same non-blocking way as `O`), rather than the configured editor. Every other file, every directory,
+and any `.md` outside a vault still use the editor hand-off unchanged. Set it to `false` to always
+use the editor. The `n` key ([open in neovim](keys.md#opening-in-an-editor)) is unaffected — it
+always opens the file in a terminal editor regardless of this setting.
 
 `confirm_discard` guards the one piece of state the viewer can lose. Annotations (`a` / `A`) are
 session-only, so both quitting (`q`) and switching worktree (`W`) discard them. By default either

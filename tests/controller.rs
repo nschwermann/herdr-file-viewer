@@ -9589,6 +9589,7 @@ fn open_help_appends_settings_section_when_display_is_set() {
         reveal: None,
         hide_dotfiles: false,
         update_check: true,
+        obsidian_editor: true,
         confirm_discard: true,
         scroll_lines: 3,
         tree_width: 30,
@@ -9731,6 +9732,7 @@ fn help_path_reads_cached_update_status_and_issues_no_network_probe() {
 struct OpenerLog {
     opened: Vec<PathBuf>,
     revealed: Vec<PathBuf>,
+    uris: Vec<String>,
 }
 
 /// Which [`OpenerOutcome`] the fake returns for every open/reveal call.
@@ -9780,6 +9782,10 @@ impl Opener for FakeOpener {
         self.log.borrow_mut().revealed.push(path.to_path_buf());
         self.outcome()
     }
+    fn open_uri(&mut self, uri: &str) -> OpenerOutcome {
+        self.log.borrow_mut().uris.push(uri.to_string());
+        self.outcome()
+    }
 }
 
 #[test]
@@ -9791,6 +9797,112 @@ fn set_opener_injects_a_reachable_opener() {
     let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
     let (opener, _log) = FakeOpener::new(OutcomeKind::Launched);
     ctrl.set_opener(Box::new(opener));
+}
+
+// ---- Feature: `e` opens a vault markdown file in Obsidian --------------------------------
+
+#[test]
+fn e_opens_a_vault_markdown_in_obsidian_via_uri() {
+    // A `.md` inside an Obsidian vault (an ancestor holds `.obsidian/`) opens in Obsidian via the
+    // `obsidian://open` URI through the OS opener — NOT the editor. Non-blocking, so no `clear`.
+    let dir = TempDir::new();
+    std::fs::create_dir_all(dir.path().join(".obsidian")).unwrap();
+    std::fs::write(dir.path().join("My Note.md"), "# hi").unwrap();
+    let (mut ctrl, _, opened) = controller(dir.path(), false, StubGit::default(), false);
+    ctrl.apply_hide_dotfiles(true); // hide `.obsidian`, leaving `My Note.md` at the cursor
+    ctrl.apply_obsidian_editor(true);
+    let (fake, log) = FakeOpener::new(OutcomeKind::Launched);
+    ctrl.set_opener(Box::new(fake));
+    assert_eq!(
+        ctrl.tree().selected().unwrap().path.file_name().unwrap(),
+        "My Note.md"
+    );
+
+    let fx = ctrl.handle(Intent::OpenInEditor);
+    assert!(
+        fx.redraw && !fx.clear,
+        "Obsidian launch is non-blocking (no takeover)"
+    );
+    assert!(
+        opened.lock().unwrap().is_empty(),
+        "the editor hand-off was bypassed for a vault .md"
+    );
+    let uris = log.borrow().uris.clone();
+    assert_eq!(uris.len(), 1, "exactly one obsidian:// URI opened");
+    assert!(
+        uris[0].starts_with("obsidian://open?vault="),
+        "URI form: {}",
+        uris[0]
+    );
+    assert!(
+        uris[0].contains("&file=My%20Note") && !uris[0].contains(".md"),
+        "vault-relative path, percent-encoded, `.md` dropped: {}",
+        uris[0]
+    );
+}
+
+#[test]
+fn e_falls_back_to_editor_for_a_non_vault_markdown() {
+    // No `.obsidian/` ancestor → a normal editor hand-off, no obsidian URI.
+    let dir = TempDir::new();
+    std::fs::write(dir.path().join("note.md"), "# hi").unwrap();
+    let (mut ctrl, _, opened) = controller(dir.path(), false, StubGit::default(), false);
+    ctrl.apply_obsidian_editor(true);
+    let (fake, log) = FakeOpener::new(OutcomeKind::Launched);
+    ctrl.set_opener(Box::new(fake));
+
+    ctrl.handle(Intent::OpenInEditor);
+    assert_eq!(
+        opened.lock().unwrap().len(),
+        1,
+        "a non-vault note uses the editor hand-off"
+    );
+    assert!(
+        log.borrow().uris.is_empty(),
+        "no obsidian URI outside a vault"
+    );
+}
+
+#[test]
+fn e_falls_back_to_editor_when_obsidian_editor_disabled() {
+    // The toggle off: even a vault `.md` uses the editor.
+    let dir = TempDir::new();
+    std::fs::create_dir_all(dir.path().join(".obsidian")).unwrap();
+    std::fs::write(dir.path().join("note.md"), "# hi").unwrap();
+    let (mut ctrl, _, opened) = controller(dir.path(), false, StubGit::default(), false);
+    ctrl.apply_hide_dotfiles(true);
+    ctrl.apply_obsidian_editor(false);
+    let (fake, log) = FakeOpener::new(OutcomeKind::Launched);
+    ctrl.set_opener(Box::new(fake));
+
+    ctrl.handle(Intent::OpenInEditor);
+    assert_eq!(
+        opened.lock().unwrap().len(),
+        1,
+        "obsidian_editor = false → editor even for a vault .md"
+    );
+    assert!(log.borrow().uris.is_empty());
+}
+
+#[test]
+fn e_falls_back_to_editor_for_a_non_markdown_file_in_a_vault() {
+    // A `.rs` inside a vault is not a note → the editor hand-off, unchanged.
+    let dir = TempDir::new();
+    std::fs::create_dir_all(dir.path().join(".obsidian")).unwrap();
+    std::fs::write(dir.path().join("code.rs"), "fn main() {}").unwrap();
+    let (mut ctrl, _, opened) = controller(dir.path(), false, StubGit::default(), false);
+    ctrl.apply_hide_dotfiles(true);
+    ctrl.apply_obsidian_editor(true);
+    let (fake, log) = FakeOpener::new(OutcomeKind::Launched);
+    ctrl.set_opener(Box::new(fake));
+
+    ctrl.handle(Intent::OpenInEditor);
+    assert_eq!(
+        opened.lock().unwrap().len(),
+        1,
+        "a non-markdown file in a vault still uses the editor"
+    );
+    assert!(log.borrow().uris.is_empty());
 }
 
 #[test]

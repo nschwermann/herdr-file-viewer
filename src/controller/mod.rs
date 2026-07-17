@@ -445,6 +445,11 @@ pub struct Controller {
     /// `confirm_discard`, default `true`). When `false`, `q` quits and discards, which
     /// is the pre-confirm behavior.
     confirm_discard: bool,
+    /// Whether the `e` key opens a markdown file inside an Obsidian vault in Obsidian (via the
+    /// `obsidian://open` URI) rather than the configured editor (config `obsidian_editor`, default
+    /// `true`). Only markdown files under a `.obsidian/` vault are affected; every other file and
+    /// directory uses the editor hand-off unchanged.
+    obsidian_editor: bool,
     changed_only: bool,
     /// The tree's horizontal scroll offset (columns), for reading long / deeply-nested rows. Like
     /// the cursor it is navigation state: reset on a re-root (AC-13), not carried.
@@ -724,6 +729,8 @@ impl Controller {
             hide_hidden: false,
             // Defaults ON, matching the resolver: a Controller built without config still guards.
             confirm_discard: true,
+            // Defaults ON, matching the resolver: a vault `.md` opens in Obsidian.
+            obsidian_editor: true,
             tree_hscroll: 0,
             changed_only: false,
             focus: Focus::Tree,
@@ -1189,6 +1196,12 @@ impl Controller {
     /// Apply the config-driven `confirm_discard` switch. Pure in-memory wiring.
     pub fn apply_confirm_discard(&mut self, confirm: bool) {
         self.confirm_discard = confirm;
+    }
+
+    /// Apply the config-driven `obsidian_editor` switch (whether `e` opens a vault `.md` in
+    /// Obsidian). Pure in-memory wiring, mirroring [`apply_confirm_discard`](Self::apply_confirm_discard).
+    pub fn apply_obsidian_editor(&mut self, enabled: bool) {
+        self.obsidian_editor = enabled;
     }
 
     /// Set the mouse-wheel **scroll step** from the effective config (`scroll_lines`). Called once
@@ -1987,7 +2000,14 @@ impl Controller {
         if node.kind != NodeKind::File {
             return Effects::noop();
         }
-        match self.editor.open(&node.path) {
+        // A markdown file that lives inside an Obsidian vault opens in Obsidian (via the
+        // `obsidian://open` URI) rather than the editor, when enabled. Every other file — and
+        // every non-vault or non-markdown path — falls through to the editor hand-off below.
+        let path = node.path.clone();
+        if let Some(fx) = self.try_open_in_obsidian(&path) {
+            return fx;
+        }
+        match self.editor.open(&path) {
             EditorOutcome::TookOver => {
                 // The editor took the terminal and may have changed the file: re-query git so
                 // status markers and the changed-set reflect the edit, re-render the pane, and
@@ -2027,6 +2047,38 @@ impl Controller {
                 }
             }
         }
+    }
+
+    /// If `path` is a markdown file inside an Obsidian vault and `obsidian_editor` is on, hand it
+    /// to Obsidian via the `obsidian://open` URI (through the OS opener) and return the resulting
+    /// `Effects`. Returns `None` — so the caller falls through to the editor hand-off — when the
+    /// setting is off, the file is not markdown, it is not inside a vault, or no opener is
+    /// injected. Read-only: launching Obsidian never reads or writes the file (AC-N1). The launch
+    /// is non-blocking (Obsidian is a GUI app), so unlike the editor path there is no terminal
+    /// takeover and no `clear`.
+    fn try_open_in_obsidian(&mut self, path: &Path) -> Option<Effects> {
+        if !self.obsidian_editor || !crate::obsidian::is_markdown(path) {
+            return None;
+        }
+        let vault = crate::obsidian::find_vault(path)?;
+        let rel = vault.relative(path)?;
+        let uri = crate::obsidian::open_uri(&vault.name(), rel);
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // No opener injected (defensive; production always injects one) → fall through to editor.
+        let opener = self.opener.as_mut()?;
+        self.action_notice = Some(match opener.open_uri(&uri) {
+            crate::opener::OpenerOutcome::Launched => format!("Opened {name} in Obsidian"),
+            crate::opener::OpenerOutcome::NotLaunched(reason) => {
+                format!("Could not open Obsidian: {reason}")
+            }
+            crate::opener::OpenerOutcome::NonZeroExit(detail) => {
+                format!("Obsidian opener exited with {detail}")
+            }
+        });
+        Some(Effects::redraw())
     }
 
     /// Copy the selected node's path to the clipboard (`y` repo-relative, `Y` absolute). Works
