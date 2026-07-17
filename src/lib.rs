@@ -40,6 +40,7 @@ pub mod tagindex;
 pub mod text_layout;
 pub mod tree;
 pub mod update;
+pub mod vault_index;
 pub mod view_policy;
 pub mod wikilink;
 pub mod worktree;
