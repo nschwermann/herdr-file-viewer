@@ -21,6 +21,9 @@ pub mod infile;
 pub mod input;
 pub mod intent;
 pub mod launch;
+pub mod mdnote;
+pub mod media;
+pub mod obsidian;
 pub mod opener;
 pub mod picker;
 pub mod presenter;
@@ -33,6 +36,7 @@ pub mod text_layout;
 pub mod tree;
 pub mod update;
 pub mod view_policy;
+pub mod wikilink;
 pub mod worktree;
 
 /// Entry point invoked by the binary. Wires the components and runs the event loop.
