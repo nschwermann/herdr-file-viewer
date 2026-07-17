@@ -193,6 +193,7 @@ customized).
 | | `open_link_nav` | `g` | Open the wikilink navigator for the current note |
 | | `nav_back` | `[` | Go back to the previous note (link navigation) |
 | | `nav_forward` | `]` | Go forward (link navigation) |
+| | `open_outline` | `o` | Open the heading outline of the current markdown note |
 | **Session** | `dismiss_update` | `u` | Dismiss the update-available banner for this session |
 | | `switch_worktree` | `W` | Open the worktree picker to re-root at another git worktree |
 | | `show_help` | `?` | Open the in-app help overlay (What's New and About) |

@@ -156,6 +156,9 @@ pub struct ViewState {
     /// When `Some`, the wikilink navigator overlay is drawn on top of the columns (the `g` key).
     /// `None` ⇒ no overlay. A centered list of the current note's links, mirroring the finder.
     pub link_nav: Option<LinkNavView>,
+    /// When `Some`, the heading-outline overlay is drawn on top of the columns (the `o` key).
+    /// `None` ⇒ no overlay. A centered list of the current note's headings, indented by level.
+    pub outline: Option<OutlineView>,
 }
 
 /// The worktree picker's draw model (an owned snapshot of the controller's picker state, so
@@ -268,6 +271,24 @@ pub struct LinkNavRowView {
     /// Whether the link resolves to a note in the vault. An unresolved row draws an
     /// `(unresolved)` marker and is never followed.
     pub resolved: bool,
+}
+
+/// The heading-outline overlay's draw model (an owned snapshot of the controller's
+/// [`crate::outline::OutlineState`], so the Presenter stays borrow-free). Built by the Session
+/// Controller's `view_state()`. Mirrors [`LinkNavView`], but rows carry a level for indentation.
+pub struct OutlineView {
+    /// The heading rows, in source order.
+    pub rows: Vec<OutlineRowView>,
+    /// Index into `rows` of the highlighted row.
+    pub cursor: usize,
+}
+
+/// One heading row in the outline overlay.
+pub struct OutlineRowView {
+    /// The heading text. Sanitized and indented (by level) at draw for AC-27.
+    pub text: String,
+    /// The ATX heading level 1..=6 — drives the row's indent (level-1 steps).
+    pub level: u8,
 }
 
 /// Owned, typed persistent-indicator projection for the pure Presenter.
@@ -1475,6 +1496,10 @@ pub fn draw(frame: &mut Frame, state: &ViewState) -> (u16, u16) {
     if let Some(nav) = &state.link_nav {
         draw_link_nav_overlay(frame, frame.area(), nav);
     }
+    // The heading outline is also a modal overlay (keyboard-only). Only one modal is ever open.
+    if let Some(outline) = &state.outline {
+        draw_outline_overlay(frame, frame.area(), outline);
+    }
     // Annotation modals are keyboard-only overlays. They add no hit-test geometry; their owned,
     // typed draw models contain raw fields and the Presenter formats/sanitizes them here.
     if let Some(overview) = &state.annotation_overview {
@@ -1816,6 +1841,14 @@ const LINK_NAV_TITLE: &str = "Follow link";
 const LINK_NAV_FOOTER_HINT: &str = "↑↓/j/k move · ⏎ follow · esc close";
 /// The trailing marker appended to a link row that resolves to no note in the vault.
 const LINK_NAV_UNRESOLVED: &str = "  (unresolved)";
+
+/// The heading-outline overlay's top-left title (the box label).
+const OUTLINE_TITLE: &str = "Outline";
+/// The heading-outline overlay's key-hint footer on the bottom border — its real bindings, with
+/// herdr's ` · ` separator. Static (not repo-derived), so no sanitization is needed.
+const OUTLINE_FOOTER_HINT: &str = "↑↓/j/k move · ⏎ jump · esc close";
+/// How many leading spaces one heading level adds to a row's indent, so the hierarchy reads.
+const OUTLINE_INDENT_STEP: usize = 2;
 
 /// The help overlay's top-left title (the box label).
 const HELP_TITLE: &str = "Help";
@@ -2174,6 +2207,85 @@ fn draw_link_nav_overlay(frame: &mut Frame, area: Rect, nav: &LinkNavView) {
             height: inner.height,
         };
         let sb_state = scrollbar_state(nav.rows.len(), nav.cursor, visible);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .thumb_symbol("▐")
+                .track_symbol(None)
+                .begin_symbol(None)
+                .end_symbol(None),
+            sb_area,
+            &mut sb_state.clone(),
+        );
+    }
+}
+
+/// Draw the heading-outline overlay: a centered, size-to-content list of the current note's
+/// headings, each indented by `(level-1)` steps so the hierarchy reads (mirrors the wikilink
+/// navigator, minus the resolved marker). Sanitizes every row for AC-27.
+fn draw_outline_overlay(frame: &mut Frame, area: Rect, outline: &OutlineView) {
+    let rows: Vec<Line<'static>> = outline
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let base = if i == outline.cursor {
+                Style::new().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::new()
+            };
+            let indent = OUTLINE_INDENT_STEP * (row.level.max(1) as usize - 1);
+            let text = format!("{}{}", " ".repeat(indent), sanitize_control(&row.text));
+            Line::from(Span::styled(text, base))
+        })
+        .collect();
+
+    let hint_style = Style::new().fg(Color::Reset);
+    let top_left = Line::from(OUTLINE_TITLE);
+    let footer = Line::styled(OUTLINE_FOOTER_HINT, hint_style).centered();
+
+    // Size the box to the widest row / the chrome, clamped to the frame (mirrors the finder).
+    let max_row_w = rows.iter().map(Line::width).max().unwrap_or(0);
+    let desired_inner_w = max_row_w
+        .max(top_left.width())
+        .max(footer.width())
+        .min(u16::MAX as usize) as u16;
+    let desired_inner_h = (rows.len().min(u16::MAX as usize) as u16).max(1);
+    let want_w = desired_inner_w
+        .saturating_add(2)
+        .saturating_add(PICKER_PADDING * 2);
+    let want_h = desired_inner_h
+        .saturating_add(2)
+        .saturating_add(PICKER_PADDING * 2);
+    let cap_w = area.width.saturating_sub(2);
+    let cap_h = area.height.saturating_sub(2);
+    let popup = centered_rect_sized(want_w.min(cap_w), want_h.min(cap_h), area);
+
+    frame.render_widget(Clear, popup);
+    let block = modal_frame()
+        .title_top(top_left)
+        .title_bottom(footer)
+        .border_style(modal_border_style());
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    if inner.height == 0 || rows.is_empty() {
+        return;
+    }
+    let visible = inner.height as usize;
+    let offset = scroll_offset(outline.cursor, rows.len(), visible);
+    let window: Vec<Line<'static>> = rows.into_iter().skip(offset).take(visible).collect();
+    frame.render_widget(Paragraph::new(window), inner);
+
+    // Vertical scrollbar when the rows overflow the visible height. It tracks the cursor (not the
+    // viewport offset) so the thumb follows the selection, like the finder/tree bars.
+    if outline.rows.len() > visible {
+        let sb_area = Rect {
+            x: inner.x + inner.width.saturating_sub(1),
+            y: inner.y,
+            width: 1,
+            height: inner.height,
+        };
+        let sb_state = scrollbar_state(outline.rows.len(), outline.cursor, visible);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .thumb_symbol("▐")

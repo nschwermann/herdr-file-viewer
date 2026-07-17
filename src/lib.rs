@@ -26,6 +26,7 @@ pub mod mdnote;
 pub mod media;
 pub mod obsidian;
 pub mod opener;
+pub mod outline;
 pub mod picker;
 pub mod presenter;
 pub mod proc;

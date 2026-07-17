@@ -10636,3 +10636,118 @@ fn following_a_link_with_a_heading_anchor_queues_a_scroll_to_that_line() {
         "the `#Middle` anchor queues a jump to the heading's source line (5)"
     );
 }
+
+// ── Heading outline (`o`) ───────────────────────────────────────────────────────────────────
+
+/// A temp dir with `Note.md` (three headings at known source lines) and a controller settled on it.
+/// No `.obsidian/` marker is needed — the outline works on any markdown file, not just vault notes.
+fn outline_note() -> (TempDir, Controller) {
+    let dir = TempDir::new();
+    // Headings: "Title" (l1, line 1), "Section A" (l2, line 3), "Section B" (l2, line 7).
+    std::fs::write(
+        dir.path().join("Note.md"),
+        "# Title\n\n## Section A\n\ntext\n\n## Section B\n",
+    )
+    .unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    ctrl.set_content_viewport(60, 20);
+    let note = dir.path().join("Note.md");
+    select_and_settle(&mut ctrl, &note, "Note.md");
+    (dir, ctrl)
+}
+
+#[test]
+fn o_on_markdown_with_headings_populates_the_outline() {
+    let (_dir, mut ctrl) = outline_note();
+    let fx = ctrl.handle(Intent::OpenOutline);
+    assert!(fx.redraw);
+    assert!(ctrl.outline_open(), "the outline opens on a markdown note");
+
+    let rows = ctrl
+        .view_state()
+        .outline
+        .expect("outline view present")
+        .rows;
+    assert_eq!(rows.len(), 3, "Note.md has three headings");
+    assert_eq!(rows[0].text, "Title");
+    assert_eq!(rows[0].level, 1);
+    assert_eq!(rows[1].text, "Section A");
+    assert_eq!(rows[1].level, 2);
+    assert_eq!(rows[2].text, "Section B");
+    assert_eq!(rows[2].level, 2);
+}
+
+#[test]
+fn o_on_non_markdown_notices_and_does_not_open() {
+    let dir = TempDir::new();
+    std::fs::write(dir.path().join("notes.txt"), "# Not a heading here\n").unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    let txt = dir.path().join("notes.txt");
+    select_and_settle(&mut ctrl, &txt, "notes.txt");
+
+    ctrl.handle(Intent::OpenOutline);
+    assert!(
+        !ctrl.outline_open(),
+        "a non-markdown file never opens the outline"
+    );
+    assert!(
+        ctrl.action_notice()
+            .unwrap_or("")
+            .contains("open a markdown file"),
+        "a guidance notice is shown, got: {:?}",
+        ctrl.action_notice()
+    );
+}
+
+#[test]
+fn o_on_markdown_with_no_headings_notices_and_does_not_open() {
+    let dir = TempDir::new();
+    std::fs::write(
+        dir.path().join("Bare.md"),
+        "just prose, no headings at all\n",
+    )
+    .unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    let bare = dir.path().join("Bare.md");
+    select_and_settle(&mut ctrl, &bare, "Bare.md");
+
+    ctrl.handle(Intent::OpenOutline);
+    assert!(
+        !ctrl.outline_open(),
+        "a heading-less note does not open the outline"
+    );
+    assert!(
+        ctrl.action_notice()
+            .unwrap_or("")
+            .contains("No headings in this note"),
+        "the heading-less notice is shown, got: {:?}",
+        ctrl.action_notice()
+    );
+}
+
+#[test]
+fn jumping_to_a_heading_closes_the_outline_and_queues_the_scroll() {
+    let (dir, mut ctrl) = outline_note();
+    let note = dir.path().join("Note.md");
+
+    ctrl.handle(Intent::OpenOutline);
+    // Move to row 2 — "Section B", on source line 7.
+    ctrl.handle_outline_key(key(KeyCode::Char('j')));
+    ctrl.handle_outline_key(key(KeyCode::Char('j')));
+    let fx = ctrl.handle_outline_key(key(KeyCode::Enter));
+    assert!(fx.redraw);
+    assert!(
+        !ctrl.outline_open(),
+        "jumping to a heading closes the outline"
+    );
+    assert_eq!(
+        selected_path(&ctrl).as_deref(),
+        Some(note.as_path()),
+        "jumping re-renders the current note in place (the selection does not move)"
+    );
+    assert_eq!(
+        ctrl.pending_goto_line(),
+        Some(7),
+        "the selected heading queues a jump to its source line (7)"
+    );
+}

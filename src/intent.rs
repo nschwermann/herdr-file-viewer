@@ -145,6 +145,12 @@ pub enum Intent {
     /// when the displayed file is a markdown note inside an Obsidian vault; otherwise it shows a
     /// notice and opens nothing.
     OpenLinkNav,
+    /// Open the heading outline overlay for the current markdown note (`o`): a centered list of the
+    /// note's headings, indented by level. Read-only navigation — jumping scrolls the content pane
+    /// to the selected heading's source line; it never modifies any file (AC-N1, AC-N3). Opens only
+    /// when the displayed file is a markdown note with at least one heading; otherwise it shows a
+    /// notice and opens nothing.
+    OpenOutline,
     /// Go back to the previously-viewed note in the link-navigation history (`[`). Read-only
     /// navigation — it re-reveals an already-visited note; no file or git mutation (AC-N1). A
     /// no-op notice when the back-stack is empty.
@@ -159,7 +165,7 @@ pub enum Intent {
 impl Intent {
     /// Every intent variant — lets the dispatcher and tests enumerate the closed set so
     /// keyboard-completeness (AC-18) and the no-file/git-mutation invariant (AC-N3) stay checkable.
-    pub const ALL: [Intent; 40] = [
+    pub const ALL: [Intent; 41] = [
         Intent::NavUp,
         Intent::NavDown,
         Intent::Expand,
@@ -196,6 +202,7 @@ impl Intent {
         Intent::TreeScrollLeft,
         Intent::TreeScrollRight,
         Intent::OpenLinkNav,
+        Intent::OpenOutline,
         Intent::NavBack,
         Intent::NavForward,
         Intent::ShowHelp,
@@ -251,6 +258,7 @@ mod tests {
                 | Intent::TreeScrollLeft
                 | Intent::TreeScrollRight
                 | Intent::OpenLinkNav
+                | Intent::OpenOutline
                 | Intent::NavBack
                 | Intent::NavForward
                 | Intent::ShowHelp
@@ -327,11 +335,11 @@ mod tests {
     }
 
     #[test]
-    fn all_length_is_40() {
+    fn all_length_is_41() {
         assert_eq!(
             Intent::ALL.len(),
-            40,
-            "Intent::ALL must have exactly 40 variants after adding ToggleProperties"
+            41,
+            "Intent::ALL must have exactly 41 variants after adding OpenOutline"
         );
     }
 
@@ -340,6 +348,14 @@ mod tests {
         assert!(Intent::ALL.contains(&Intent::OpenLinkNav));
         assert!(Intent::ALL.contains(&Intent::NavBack));
         assert!(Intent::ALL.contains(&Intent::NavForward));
+    }
+
+    #[test]
+    fn open_outline_is_in_all() {
+        assert!(
+            Intent::ALL.contains(&Intent::OpenOutline),
+            "Intent::ALL must contain OpenOutline"
+        );
     }
 
     #[test]

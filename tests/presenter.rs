@@ -103,6 +103,7 @@ fn sample_state() -> ViewState {
         content_selection: None,
         help: None,
         link_nav: None,
+        outline: None,
     }
 }
 

@@ -108,6 +108,19 @@ holds a `.obsidian/` folder), you can follow its links to other notes without le
 (Rendered markdown shows `[[…]]` as literal text — `glow` doesn't know Obsidian syntax — so use `g`
 rather than clicking to follow a link.)
 
+## Heading outline
+
+When you are viewing a markdown note, press `o` to open its **heading outline** — a centered,
+jump-through list of the note's headings (`#` … `######`), indented by level so the structure reads.
+Move with `↑` / `↓` or `j` / `k`, press `Enter` to scroll the content pane to the selected heading,
+and `Esc` / `q` to close. The outline reads the note itself (fence- and frontmatter-aware), so a `#`
+inside a code block or the YAML block is not mistaken for a heading. If the file is not markdown, or
+has no headings, a short notice is shown and nothing opens.
+
+Because the rendered markdown view has no per-line source map, jumping switches the note to the
+line-numbered **source** view and scrolls there — the same behaviour go-to-line (`:`) uses when you
+jump from a rendered view.
+
 ## Obsidian markdown rendering
 
 The rendered markdown view (`v`) understands some Obsidian-flavored markdown that `glow` alone does

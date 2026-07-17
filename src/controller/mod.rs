@@ -29,6 +29,7 @@ mod infile;
 mod lineselect;
 mod linknav;
 mod mouse;
+mod outline;
 mod picker;
 
 use crate::annotation::AnnotationStore;
@@ -39,12 +40,13 @@ use crate::herdr::HerdrCli;
 use crate::infile::{PromptMode, PromptState, SearchState};
 use crate::intent::Intent;
 use crate::linknav::{LinkItem, LinkNavState};
+use crate::outline::{OutlineItem, OutlineState};
 use crate::picker::PickerState;
 use crate::presenter::{
     AnnotationEditorKind, AnnotationEditorView, AnnotationIndicatorsView, AnnotationOverviewView,
     AnnotationRowView, AnnotationTargetView, CharSelView, ContentSearch, DiscardConfirmView,
-    FinderView, Focus, HelpView, LineSelectView, LinkNavRowView, LinkNavView, PaneGeometry,
-    PickerRowView, PickerView, ViewState,
+    FinderView, Focus, HelpView, LineSelectView, LinkNavRowView, LinkNavView, OutlineRowView,
+    OutlineView, PaneGeometry, PickerRowView, PickerView, ViewState,
 };
 use crate::render::{Prepared, Renderers};
 use crate::root::Resolved;
@@ -314,6 +316,9 @@ enum Modal {
     /// The wikilink navigator (the `g` key): a centered list of the current markdown-in-vault
     /// note's links. Keyboard-only, like the prompt; a re-root resets it to `Modal::None`.
     LinkNav(LinkNavState),
+    /// The heading outline (the `o` key): a centered list of the current markdown note's headings,
+    /// indented by level. Keyboard-only, like the prompt; a re-root resets it to `Modal::None`.
+    Outline(OutlineState),
     /// The confirm raised when an action would discard unexported annotations. Carries what to do
     /// once the user decides; the store it guards is the controller's.
     DiscardConfirm(DiscardAction),
@@ -447,6 +452,18 @@ impl Modal {
     fn link_nav_mut(&mut self) -> Option<&mut LinkNavState> {
         match self {
             Modal::LinkNav(s) => Some(s),
+            _ => None,
+        }
+    }
+    fn outline(&self) -> Option<&OutlineState> {
+        match self {
+            Modal::Outline(s) => Some(s),
+            _ => None,
+        }
+    }
+    fn outline_mut(&mut self) -> Option<&mut OutlineState> {
+        match self {
+            Modal::Outline(s) => Some(s),
             _ => None,
         }
     }
@@ -1521,6 +1538,7 @@ impl Controller {
                 }),
             help: self.help_view(),
             link_nav: self.link_nav_view(),
+            outline: self.outline_view(),
         }
     }
 
@@ -1645,6 +1663,12 @@ impl Controller {
         if self.modal.link_nav().is_some() {
             return Effects::noop();
         }
+        // The heading outline is modal too: the run loop routes raw keys to `handle_outline_key`
+        // while it is open, so `handle` should not be reached. Guard structurally — symmetric with
+        // the wikilink-navigator guard.
+        if self.modal.outline().is_some() {
+            return Effects::noop();
+        }
         match intent {
             Intent::NavUp => self.navigate(-1),
             Intent::NavDown => self.navigate(1),
@@ -1702,6 +1726,7 @@ impl Controller {
                 }
             },
             Intent::OpenLinkNav => self.open_link_nav(),
+            Intent::OpenOutline => self.open_outline(),
             Intent::NavBack => self.nav_back(),
             Intent::NavForward => self.nav_forward(),
             Intent::ShowHelp => self.open_help(),

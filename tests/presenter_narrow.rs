@@ -67,6 +67,7 @@ fn state(width: u16, focus: Focus) -> ViewState {
         content_selection: None,
         help: None,
         link_nav: None,
+        outline: None,
     }
 }
 

@@ -395,6 +395,13 @@ pub(crate) const REGISTRY: &[Binding] = &[
         category: "Search & jump",
     },
     Binding {
+        intent: Intent::OpenOutline,
+        name: "open_outline",
+        default_keys: &[KeyCode::Char('o')],
+        description: "Open the heading outline of the current markdown note.",
+        category: "Search & jump",
+    },
+    Binding {
         intent: Intent::TreeScrollLeft,
         name: "tree_scroll_left",
         default_keys: &[KeyCode::Char('H')],
@@ -734,6 +741,7 @@ mod tests {
         (KeyCode::Char('m'), Intent::NextMatch),
         (KeyCode::Char('M'), Intent::PrevMatch),
         (KeyCode::Char('g'), Intent::OpenLinkNav),
+        (KeyCode::Char('o'), Intent::OpenOutline),
         (KeyCode::Char('['), Intent::NavBack),
         (KeyCode::Char(']'), Intent::NavForward),
         (KeyCode::Char('H'), Intent::TreeScrollLeft),
@@ -1183,8 +1191,9 @@ mod tests {
             None,
             "Ctrl-R must not fire an intent"
         );
-        // Lowercase `o` stays unbound; `r` stays Refresh (no collision).
-        assert_eq!(map_key(k(KeyCode::Char('o'))), None);
+        // Lowercase `s` stays unbound; `r` stays Refresh (no collision). (`o` now opens the
+        // heading outline, so `s` — still free — stands in as the unbound-key probe here.)
+        assert_eq!(map_key(k(KeyCode::Char('s'))), None);
         assert_eq!(map_key(k(KeyCode::Char('r'))), Some(Intent::Refresh));
     }
 
