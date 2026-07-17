@@ -40,6 +40,7 @@ fn config_example_documents_every_config_key() {
     // list in lockstep with `Config`'s fields in `src/config.rs`.
     for key in [
         "editor",
+        "neovim",
         "markdown",
         "diff",
         "syntax",

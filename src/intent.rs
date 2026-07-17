@@ -45,8 +45,15 @@ pub enum Intent {
     ToggleBaseline,
     /// Cycle the content pane's view mode over the applicable set (AC-11).
     CycleView,
-    /// Hand the selected file off to an external editor (AC-19).
+    /// Hand the selected file off to an external editor (AC-19). For a markdown file inside an
+    /// Obsidian vault this opens it in Obsidian instead (config `obsidian_editor`); every other
+    /// file uses the configured editor.
     OpenInEditor,
+    /// Always hand the selected file off to **neovim** (config `neovim`, default `nvim`), in the
+    /// terminal — a suspend/exec/restore hand-off exactly like [`Intent::OpenInEditor`], but never
+    /// routed to Obsidian and independent of `$EDITOR`/the `editor` config. Bound to `n`. Launch
+    /// only; it never reads or writes the file in-pane (AC-N1).
+    OpenInNeovim,
     /// Open the selected entry with the OS default application (`O`). Read-only external
     /// hand-off — launches another process, never modifies the file (AC-1, AC-N1). Non-blocking
     /// (does not suspend the TUI).
@@ -134,7 +141,7 @@ pub enum Intent {
 impl Intent {
     /// Every intent variant — lets the dispatcher and tests enumerate the closed set so
     /// keyboard-completeness (AC-18) and the no-file/git-mutation invariant (AC-N3) stay checkable.
-    pub const ALL: [Intent; 35] = [
+    pub const ALL: [Intent; 36] = [
         Intent::NavUp,
         Intent::NavDown,
         Intent::Expand,
@@ -147,6 +154,7 @@ impl Intent {
         Intent::ToggleBaseline,
         Intent::CycleView,
         Intent::OpenInEditor,
+        Intent::OpenInNeovim,
         Intent::OpenWithApp,
         Intent::RevealInFileManager,
         Intent::CopyRepoPath,
@@ -198,6 +206,7 @@ mod tests {
                 | Intent::ToggleBaseline
                 | Intent::CycleView
                 | Intent::OpenInEditor
+                | Intent::OpenInNeovim
                 | Intent::OpenWithApp
                 | Intent::RevealInFileManager
                 | Intent::CopyRepoPath
@@ -292,12 +301,17 @@ mod tests {
     }
 
     #[test]
-    fn all_length_is_35() {
+    fn all_length_is_36() {
         assert_eq!(
             Intent::ALL.len(),
-            35,
-            "Intent::ALL must have exactly 35 variants after adding annotation actions"
+            36,
+            "Intent::ALL must have exactly 36 variants after adding OpenInNeovim"
         );
+    }
+
+    #[test]
+    fn open_in_neovim_is_in_all() {
+        assert!(Intent::ALL.contains(&Intent::OpenInNeovim));
     }
 
     #[test]

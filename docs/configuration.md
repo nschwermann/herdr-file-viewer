@@ -39,7 +39,7 @@ normal case — every key falls back to its default.
 A config key always wins. Only two keys also have an environment-variable fallback tier below the
 config key and above the built-in default — `editor` (`$EDITOR`) and `update_check`
 (`$HERDR_FILE_VIEWER_NO_UPDATE_CHECK`) — giving those two a `config > env > default` chain. Every
-other key (`markdown`, `diff`, `syntax`, `open`, `reveal`, `hide_dotfiles`,
+other key (`markdown`, `diff`, `syntax`, `open`, `reveal`, `neovim`, `hide_dotfiles`,
 `obsidian_editor`, `confirm_discard`, `scroll_lines`, `tree_width`, `tree_position`,
 `tree_max_cols`, `preview_max_lines`, `preview_max_kib`) has no
 applicable environment variable; for those it's `config > default` only.
@@ -50,6 +50,7 @@ applicable environment variable; for those it's `config > default` only.
 # ~/.config/herdr-file-viewer/config.toml (or the herdr-provided path above)
 
 editor = "code --wait"      # command to open a file with `e` (overrides $EDITOR)
+neovim = "nvim"             # terminal editor the `n` key always opens the current file in
 
 markdown = "glow -s dark -w 0 -"   # override the markdown / diff / syntax renderers
 diff = "delta"                     # (defaults: glow / delta / bat)
@@ -112,10 +113,10 @@ actually held, so leaving it on costs nothing in a session that never uses them.
 
 ## Command values
 
-Command values (`editor`, `markdown`, `diff`, `syntax`, `open`, `reveal`) are **split into
+Command values (`editor`, `neovim`, `markdown`, `diff`, `syntax`, `open`, `reveal`) are **split into
 arguments** the way a shell would for simple cases — whitespace splits, double-quotes group a
-path with spaces — but **no shell is invoked**. `editor` / `open` / `reveal` get the target
-**path** appended as the final argument; the **renderers** (`markdown` / `diff` / `syntax`)
+path with spaces — but **no shell is invoked**. `editor` / `neovim` / `open` / `reveal` get the
+target **path** appended as the final argument; the **renderers** (`markdown` / `diff` / `syntax`)
 instead get the file **content on stdin** and your value **replaces** the whole default command
 (flags aren't merged), so a custom renderer must read stdin (glow and bat need a trailing `-`)
 and set its own flags — the token `{name}` is substituted with the file name.
@@ -167,7 +168,8 @@ customized).
 | | `toggle_changed_only` | `c` | Restrict the tree to changed files, or restore the full tree |
 | | `toggle_baseline` | `b` | Switch the diff baseline between base-branch and `HEAD` |
 | | `refresh` | `r` | Re-read git state and re-render |
-| **Open & copy** | `open_in_editor` | `e` | Hand the selected file off to an external editor |
+| **Open & copy** | `open_in_editor` | `e` | Open the selected file in the editor (or Obsidian for a vault `.md`) |
+| | `open_in_neovim` | `n` | Always open the selected file in neovim (in the terminal) |
 | | `open_with_app` | `O` | Open the selected entry with the OS default application |
 | | `reveal_in_file_manager` | `R` | Reveal the selected entry in the OS file manager |
 | | `copy_repo_path` | `y` | Copy the selected node's repo-relative path to the clipboard |
@@ -177,8 +179,8 @@ customized).
 | **Search & jump** | `open_finder` | `f` | Open the go-to-file fuzzy finder |
 | | `open_go_to_line` | `:` | Open the go-to-line prompt |
 | | `open_search` | `/` | Open the in-file search prompt |
-| | `next_match` | `n` | Jump to the next search match (wraps) |
-| | `prev_match` | `N` | Jump to the previous search match (wraps) |
+| | `next_match` | `m` | Jump to the next search match (wraps) |
+| | `prev_match` | `M` | Jump to the previous search match (wraps) |
 | **Session** | `dismiss_update` | `u` | Dismiss the update-available banner for this session |
 | | `switch_worktree` | `W` | Open the worktree picker to re-root at another git worktree |
 | | `show_help` | `?` | Open the in-app help overlay (What's New and About) |

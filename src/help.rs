@@ -768,6 +768,7 @@ mod tests {
     fn sample_eff() -> EffectiveSettings {
         EffectiveSettings {
             editor: Some(std::ffi::OsString::from("nano")),
+            neovim: std::ffi::OsString::from("nvim"),
             markdown: Some(vec!["glow".to_string(), "-w".to_string(), "80".to_string()]),
             diff: None,
             syntax: None,

@@ -223,7 +223,14 @@ pub(crate) const REGISTRY: &[Binding] = &[
         intent: Intent::OpenInEditor,
         name: "open_in_editor",
         default_keys: &[KeyCode::Char('e')],
-        description: "Hand the selected file off to an external editor.",
+        description: "Open the selected file in the editor (or in Obsidian for a vault .md).",
+        category: "Open & copy",
+    },
+    Binding {
+        intent: Intent::OpenInNeovim,
+        name: "open_in_neovim",
+        default_keys: &[KeyCode::Char('n')],
+        description: "Always open the selected file in neovim (in the terminal).",
         category: "Open & copy",
     },
     Binding {
@@ -348,14 +355,14 @@ pub(crate) const REGISTRY: &[Binding] = &[
     Binding {
         intent: Intent::NextMatch,
         name: "next_match",
-        default_keys: &[KeyCode::Char('n')],
+        default_keys: &[KeyCode::Char('m')],
         description: "Advance to the next search match (wraps at the end).",
         category: "Search & jump",
     },
     Binding {
         intent: Intent::PrevMatch,
         name: "prev_match",
-        default_keys: &[KeyCode::Char('N')],
+        default_keys: &[KeyCode::Char('M')],
         description: "Retreat to the previous search match (wraps at the start).",
         category: "Search & jump",
     },
@@ -692,11 +699,12 @@ mod tests {
         (KeyCode::Char('b'), Intent::ToggleBaseline),
         (KeyCode::Char('v'), Intent::CycleView),
         (KeyCode::Char('e'), Intent::OpenInEditor),
+        (KeyCode::Char('n'), Intent::OpenInNeovim),
         (KeyCode::Char('f'), Intent::OpenFinder),
         (KeyCode::Char(':'), Intent::OpenGoToLine),
         (KeyCode::Char('/'), Intent::OpenSearch),
-        (KeyCode::Char('n'), Intent::NextMatch),
-        (KeyCode::Char('N'), Intent::PrevMatch),
+        (KeyCode::Char('m'), Intent::NextMatch),
+        (KeyCode::Char('M'), Intent::PrevMatch),
         (KeyCode::Char('H'), Intent::TreeScrollLeft),
         (KeyCode::Char('L'), Intent::TreeScrollRight),
         (KeyCode::Char('O'), Intent::OpenWithApp),
@@ -977,16 +985,19 @@ mod tests {
 
     #[test]
     fn search_keys_map_correctly_and_modifier_chords_are_inert() {
-        // AC-8, AC-N6: `/` → OpenSearch, `n` → NextMatch, `N` → PrevMatch.
+        // AC-8, AC-N6: `/` → OpenSearch, `m` → NextMatch, `M` → PrevMatch (the search next/prev
+        // pair moved off `n`/`N` when `n` became open-in-neovim).
         // Ctrl/Alt chords on these keys must NOT fire an intent (AC-N6).
-        // `N` is a shifted character (Char('N') with SHIFT) — must still map.
+        // `M` is a shifted character (Char('M') with SHIFT) — must still map.
         assert_eq!(map_key(k(KeyCode::Char('/'))), Some(Intent::OpenSearch));
-        assert_eq!(map_key(k(KeyCode::Char('n'))), Some(Intent::NextMatch));
-        assert_eq!(map_key(k(KeyCode::Char('N'))), Some(Intent::PrevMatch));
+        assert_eq!(map_key(k(KeyCode::Char('m'))), Some(Intent::NextMatch));
+        assert_eq!(map_key(k(KeyCode::Char('M'))), Some(Intent::PrevMatch));
+        // `n` now opens neovim, not the next match.
+        assert_eq!(map_key(k(KeyCode::Char('n'))), Some(Intent::OpenInNeovim));
 
-        // `N` with SHIFT bit set (as some terminals report it) still maps:
+        // `M` with SHIFT bit set (as some terminals report it) still maps:
         assert_eq!(
-            map_key(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT)),
+            map_key(KeyEvent::new(KeyCode::Char('M'), KeyModifiers::SHIFT)),
             Some(Intent::PrevMatch)
         );
 
@@ -1000,15 +1011,15 @@ mod tests {
             None
         );
         assert_eq!(
-            map_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL)),
+            map_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::CONTROL)),
             None
         );
         assert_eq!(
-            map_key(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::CONTROL)),
+            map_key(KeyEvent::new(KeyCode::Char('M'), KeyModifiers::CONTROL)),
             None
         );
         assert_eq!(
-            map_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::ALT)),
+            map_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::ALT)),
             None
         );
     }

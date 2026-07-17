@@ -9,6 +9,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 - `e` on a markdown note inside an Obsidian vault (an ancestor holds `.obsidian/`) opens it in Obsidian via the `obsidian://open` URI instead of the editor; toggle with `obsidian_editor = false`. Every other file and directory uses the editor hand-off unchanged. → [keys](docs/keys.md#opening-in-an-editor)
+- `n` always opens the current file in **neovim** (config `neovim`, default `nvim`), in the terminal — a suspend/exec/restore hand-off like `e`, independent of `$EDITOR` and never routed to Obsidian. → [keys](docs/keys.md#opening-in-an-editor)
+
+### Changed
+- The in-file search next/previous-match keys moved from `n`/`N` to **`m`/`M`** (freeing `n` for open-in-neovim). Remap them via `[keys]` if you prefer. → [keys](docs/keys.md)
 
 ## [1.13.0] - 2026-07-16
 

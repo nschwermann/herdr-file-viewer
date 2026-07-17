@@ -111,6 +111,9 @@ pub enum KeySpec {
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct Config {
     pub editor: Option<String>,
+    /// The terminal editor the `n` key always opens the current file in (a suspend/exec/restore
+    /// hand-off, like `e`). `None` falls back to `nvim`. Independent of `editor`/`$EDITOR`.
+    pub neovim: Option<String>,
     pub markdown: Option<String>,
     pub diff: Option<String>,
     pub syntax: Option<String>,
@@ -265,6 +268,9 @@ pub fn load_config_from_env() -> (Config, LoadOutcome) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveSettings {
     pub editor: Option<std::ffi::OsString>,
+    /// The effective **neovim** command for the `n` key: the config `neovim` when present, else
+    /// `nvim`. Config-or-default (no env var). Always `Some` — `n` always has a command to run.
+    pub neovim: std::ffi::OsString,
     pub markdown: Option<Vec<String>>,
     pub diff: Option<Vec<String>>,
     pub syntax: Option<Vec<String>>,
@@ -330,6 +336,16 @@ pub fn resolve(config: &Config, get_env: impl Fn(&str) -> Option<String>) -> Eff
                 .filter(|s| !s.is_empty())
                 .map(std::ffi::OsString::from)
         });
+
+    // Config > default; no env var. Always resolves to a command (default `nvim`), so `n` always
+    // has a terminal editor to hand off to. An empty/whitespace-only config value falls back to
+    // the default rather than an unspawnable empty command.
+    let neovim = config
+        .neovim
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .map(std::ffi::OsString::from)
+        .unwrap_or_else(|| std::ffi::OsString::from("nvim"));
 
     let markdown = config
         .markdown
@@ -419,6 +435,7 @@ pub fn resolve(config: &Config, get_env: impl Fn(&str) -> Option<String>) -> Eff
 
     EffectiveSettings {
         editor,
+        neovim,
         markdown,
         diff,
         syntax,

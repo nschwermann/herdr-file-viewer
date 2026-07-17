@@ -48,6 +48,11 @@
 # default. Example:
 #editor = "code --wait"
 
+# Terminal editor the `n` key always opens the current file in (a suspend/exec/
+# restore hand-off, like `e`), regardless of `editor`/$EDITOR or the Obsidian
+# routing. Default is `nvim`; the file path is appended as the last argument.
+#neovim = "nvim"
+
 # Content-pane renderers. Defaults: glow (markdown), delta (diff), bat (syntax);
 # if one is not installed the pane falls back to plain text with a notice. These
 # examples are working commands equivalent to the defaults (note the stdin `-`);

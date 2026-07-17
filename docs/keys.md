@@ -24,12 +24,13 @@ is additive and on by default.
 | `b` | Toggle the diff baseline (base branch ⇄ `HEAD`) |
 | `v` | Cycle the content view mode |
 | `e` | Open the selected file in `$EDITOR` — **or in Obsidian** when it is a `.md` inside an Obsidian vault (see [Opening in an editor](#opening-in-an-editor)) |
+| `n` | **Open in neovim**: always open the selected file in neovim (config `neovim`, default `nvim`), in the terminal — the viewer suspends, runs neovim, and resumes on exit. Never routed to Obsidian; independent of `e` / `$EDITOR` |
 | `O` (Shift+`o`) | **Open with default app**: hand the selected file or directory to the OS default application (e.g. an image opens in the system viewer). Read-only hand-off; non-blocking (the viewer keeps running) |
 | `R` (Shift+`r`) | **Reveal in file manager**: open the OS file manager (Finder / Explorer / a Linux file manager) with the selected entry highlighted where supported, so you can drag it out (e.g. into Slack). Read-only hand-off |
 | `f` | **Go to file**: open a fuzzy finder over every file in the tree; type to filter, `↑` / `↓` move, `Enter` opens the selected file, `Esc` cancels (`←` / `→` scroll long paths) |
 | `:` | **Go to line**: open a prompt and jump the content pane to a source line by number (`Enter` jumps, `Esc` cancels; out-of-range clamps to the last line). Works in any view; in a rendered-markdown or diff view, confirming switches to the line-numbered content view and jumps there |
 | `/` | **Search in file**: open a prompt and highlight every match in the content pane as you type; `Enter` commits the search (highlights persist), `Esc` clears it and restores the scroll. Smartcase (a lowercase query is case-insensitive; a capital makes it case-sensitive). Works in any view |
-| `n` / `N` (Shift+`n`) | After a committed search, jump to the **next** / **previous** match and scroll it into view, wrapping at the ends with a notice |
+| `m` / `M` (Shift+`m`) | After a committed search, jump to the **next** / **previous** match and scroll it into view, wrapping at the ends with a notice (moved from `n`/`N`, since `n` now opens neovim) |
 | `y` | Copy the selected file's **repo-relative** path to the clipboard (e.g. `src/app.rs`) |
 | `Y` | Copy the selected file's **absolute** path to the clipboard |
 | `a` | **Add annotation**: open the annotation editor for the selected file (`←`/`→` or `Home`/`End` move the text cursor, `Enter` saves, `Esc` cancels). Annotations live only for this viewer session and never modify the file |
@@ -65,7 +66,7 @@ content scroll.)
 
 Character keys act only when no control chord is held (so terminal chords like `Ctrl+C` are
 never intercepted); `Shift` is permitted, for keys such as `<` and `>` (and `a`/`A`, `y`/`Y`,
-`W`, `N`, `O`, `R`, `Z`, `?`, `H`/`L`, `J`/`K` in line-select mode, and `d`/`D` in the annotation
+`W`, `M`, `O`, `R`, `Z`, `?`, `H`/`L`, `J`/`K` in line-select mode, and `d`/`D` in the annotation
 overview).
 
 ### Copy a path (`y` / `Y`)
@@ -155,6 +156,12 @@ Choose the editor two ways — the config key is the reliable one:
 
 If `e` says "no editor configured," neither source is set: add `editor` to your config (simplest),
 or export `$EDITOR` where the herdr server can see it (expand below).
+
+**`n` always opens neovim.** Separately from `e`, the **`n`** key always hands the current file to
+**neovim** in the terminal (the same suspend/run/resume hand-off), regardless of `editor`,
+`$EDITOR`, or the Obsidian routing above. Point it at a different terminal editor with
+`neovim = "..."` in [config](configuration.md) (it receives the file path as its last argument).
+Use `n` when you want a text editor even for a vault note that `e` would open in Obsidian.
 
 <details>
 <summary><strong>Why <code>$EDITOR</code> sometimes isn't seen (and how to fix it)</strong></summary>

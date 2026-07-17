@@ -119,6 +119,12 @@ pub fn run() -> io::Result<()> {
     // Apply the config-driven `obsidian_editor` switch: whether `e` opens a vault `.md` in
     // Obsidian instead of the editor.
     controller.apply_obsidian_editor(eff.obsidian_editor);
+    // Inject the `n`-key neovim hand-off (config `neovim`, default `nvim`): a terminal editor
+    // hand-off that suspends the TUI, execs neovim, and restores on exit — exactly like `e`, but
+    // always neovim and never routed to Obsidian.
+    controller.set_neovim_editor(Box::new(LiveEditor {
+        editor: Some(eff.neovim.clone()),
+    }));
     // Apply the config-driven mouse-wheel scroll step (`scroll_lines`); already clamped to >= 1 by
     // the resolver, so the wheel always advances at least one line/item.
     controller.apply_scroll_lines(eff.scroll_lines);

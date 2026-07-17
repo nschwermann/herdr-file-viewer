@@ -520,23 +520,24 @@ fn search_routes_keys_to_query_and_n_cycles_and_esc_restores() {
     }
     // Commit the search with Enter.
     s.send("\r").expect("send Enter to commit the search");
-    // Wait for the committed-search status bar to render before `n` — `n next` only appears in
+    // Wait for the committed-search status bar to render before `m` — `m next` only appears in
     // the committed-search bar (drawn into the bottom row after commit), so it's a robust anchor.
-    s.expect("n next")
-        .expect("the committed-search status bar renders before `n` is sent");
+    // (The search next/prev keys moved to `m`/`M` when `n` became open-in-neovim.)
+    s.expect("m next")
+        .expect("the committed-search status bar renders before `m` is sent");
 
-    // Step 6: `n` cycles to the first (and current) match: line 25 of `aaa.txt`. This line was
+    // Step 6: `m` cycles to the first (and current) match: line 25 of `aaa.txt`. This line was
     // below the initial viewport → its characters land in previously-blank cells → robust anchor.
     // AC-21 routing proof outcome: `SEARCHMARK` can only appear here if the cursor stayed on
     // `aaa.txt` (i.e. `j` inside the prompt did NOT fire NavDown).
-    s.send("n").expect("send `n` to go to next match");
+    s.send("m").expect("send `m` to go to next match");
     s.expect("SEARCHMARK").expect(
-        "AC-21 routing proof + n/N cycling: `SEARCHMARK` appears after `n` (blank-cell anchor). \
+        "AC-21 routing proof + m/M cycling: `SEARCHMARK` appears after `m` (blank-cell anchor). \
          This proves `j` in the prompt went to the query (not NavDown to jfile.txt).",
     );
 
-    // Step 7: `N` cycles backward (liveness proof — clean exit is the secondary assertion).
-    s.send("N").expect("send `N` to go to previous match");
+    // Step 7: `M` cycles backward (liveness proof — clean exit is the secondary assertion).
+    s.send("M").expect("send `M` to go to previous match");
 
     // Step 8: a bare Esc outside the prompt is inert (maps to no intent — must not crash).
     // Settle before Esc so crossterm reads a lone ESC (not Alt+char) — inter-byte gap.

@@ -552,6 +552,11 @@ pub struct Controller {
     annotations: AnnotationStore,
     git: Arc<dyn GitService>,
     editor: Box<dyn EditorHandoff>,
+    /// The `n`-key hand-off: always opens the selected file in neovim (config `neovim`, default
+    /// `nvim`), independent of the configured editor and never routed to Obsidian. Injected
+    /// post-construction via [`set_neovim_editor`](Self::set_neovim_editor) (like `opener`);
+    /// `None` in tests that never wire it, in which case `n` reports "neovim not configured".
+    neovim_editor: Option<Box<dyn EditorHandoff>>,
     clipboard: Box<dyn Clipboard>,
     /// The provider factory (ADR-0004), kept so a re-root can rebuild the root-bound providers
     /// (Git Service + Content Renderer) against the new root.
@@ -758,6 +763,7 @@ impl Controller {
             annotations: AnnotationStore::new(),
             git,
             editor,
+            neovim_editor: None,
             clipboard,
             providers,
             renderers,
@@ -1147,6 +1153,13 @@ impl Controller {
         self.opener = Some(opener);
     }
 
+    /// Inject the `n`-key neovim hand-off (config `neovim`). Post-construction (like
+    /// [`set_opener`](Self::set_opener)) so a test can inject a stub or leave it unset; production
+    /// wires the live neovim launcher. When unset, `n` reports "neovim not configured".
+    pub fn set_neovim_editor(&mut self, editor: Box<dyn EditorHandoff>) {
+        self.neovim_editor = Some(editor);
+    }
+
     /// Install the effective key bindings resolved from the registry + the config's `[keys]` table,
     /// plus the resolver's [`KeyLoadOutcome`](crate::input::KeyLoadOutcome) (Slice B, T-6). Called
     /// once by `app::run` after construction (mirrors [`set_settings_display`](Self::set_settings_display));
@@ -1487,7 +1500,7 @@ impl Controller {
     /// closed, `self.search` is `Some`). Returns `None` when no committed search is active.
     ///
     /// Format:
-    /// - ≥1 match: `Search: {query} ({current+1}/{total}) · n next · N prev · Esc clear`
+    /// - ≥1 match: `Search: {query} ({current+1}/{total}) · m next · M prev · Esc clear`
     /// - 0 matches: `Search: {query} (no matches) · Esc clear`
     fn search_status_line(&self) -> Option<String> {
         let s = self.search.as_ref()?;
@@ -1496,7 +1509,7 @@ impl Controller {
             format!("Search: {q} (no matches) · Esc clear")
         } else {
             format!(
-                "Search: {q} ({}/{}) · n next · N prev · Esc clear",
+                "Search: {q} ({}/{}) · m next · M prev · Esc clear",
                 s.current + 1,
                 s.matches.len()
             )
@@ -1570,6 +1583,7 @@ impl Controller {
             Intent::ToggleBaseline => self.toggle_baseline(),
             Intent::CycleView => self.cycle_view(),
             Intent::OpenInEditor => self.open_in_editor(),
+            Intent::OpenInNeovim => self.open_in_neovim(),
             Intent::OpenWithApp => self.open_with_app(),
             Intent::RevealInFileManager => self.reveal_in_file_manager(),
             Intent::CopyRepoPath => self.copy_path(PathKind::Repo),
@@ -2079,6 +2093,55 @@ impl Controller {
             }
         });
         Some(Effects::redraw())
+    }
+
+    /// Hand the selected file to **neovim** (the `n` key). A terminal hand-off exactly like
+    /// [`open_in_editor`](Self::open_in_editor) — suspend/exec/restore, forcing a full repaint —
+    /// but always neovim, never routed to Obsidian, and independent of the `editor`/`$EDITOR`
+    /// config. Inert on a directory or empty selection; reports a notice when no neovim hand-off is
+    /// wired.
+    fn open_in_neovim(&mut self) -> Effects {
+        let Some(node) = self.tree.selected() else {
+            return Effects::noop();
+        };
+        if node.kind != NodeKind::File {
+            return Effects::noop();
+        }
+        let path = node.path.clone();
+        let Some(neovim) = self.neovim_editor.as_mut() else {
+            self.action_notice = Some("neovim not configured".into());
+            return Effects::redraw();
+        };
+        match neovim.open(&path) {
+            EditorOutcome::TookOver => {
+                self.refresh_git_state();
+                self.dispatch_render();
+                Effects {
+                    redraw: true,
+                    clear: true,
+                    ..Default::default()
+                }
+            }
+            EditorOutcome::NoTakeover => Effects::redraw(),
+            EditorOutcome::NotLaunched(reason) => {
+                self.action_notice = Some(format!("Could not open neovim: {reason}"));
+                Effects {
+                    redraw: true,
+                    clear: true,
+                    ..Default::default()
+                }
+            }
+            EditorOutcome::NonZeroExit(detail) => {
+                self.action_notice = Some(format!("Neovim exited with {detail}"));
+                self.refresh_git_state();
+                self.dispatch_render();
+                Effects {
+                    redraw: true,
+                    clear: true,
+                    ..Default::default()
+                }
+            }
+        }
     }
 
     /// Copy the selected node's path to the clipboard (`y` repo-relative, `Y` absolute). Works

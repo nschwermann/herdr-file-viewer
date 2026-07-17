@@ -8177,12 +8177,12 @@ fn committed_search_status_bar_shows_count_and_hints() {
         "committed status bar must show current+1/total: got {line:?}"
     );
     assert!(
-        line.contains("n next"),
-        "committed status bar must contain 'n next': got {line:?}"
+        line.contains("m next"),
+        "committed status bar must contain 'm next': got {line:?}"
     );
     assert!(
-        line.contains("N prev"),
-        "committed status bar must contain 'N prev': got {line:?}"
+        line.contains("M prev"),
+        "committed status bar must contain 'M prev': got {line:?}"
     );
     assert!(
         line.contains("Esc clear"),
@@ -8204,7 +8204,7 @@ fn committed_search_status_bar_shows_count_and_hints() {
 #[test]
 fn committed_search_zero_match_status_bar_has_no_n_hint() {
     // A zero-match committed search shows the "(no matches) · Esc clear" variant,
-    // with no "n next · N prev" hints.
+    // with no "m next · M prev" hints.
     let dir = TempDir::new();
     std::fs::write(dir.path().join("a.txt"), "x\n").unwrap();
     let mut ctrl = controller_with_search_content(dir.path());
@@ -8235,8 +8235,8 @@ fn committed_search_zero_match_status_bar_has_no_n_hint() {
         "zero-match status bar must contain 'Esc clear': got {line:?}"
     );
     assert!(
-        !line.contains("n next"),
-        "zero-match status bar must NOT contain 'n next': got {line:?}"
+        !line.contains("m next"),
+        "zero-match status bar must NOT contain 'm next': got {line:?}"
     );
 }
 
@@ -9582,6 +9582,7 @@ fn open_help_appends_settings_section_when_display_is_set() {
 
     let eff = EffectiveSettings {
         editor: None,
+        neovim: std::ffi::OsString::from("nvim"),
         markdown: None,
         diff: None,
         syntax: None,
@@ -9903,6 +9904,55 @@ fn e_falls_back_to_editor_for_a_non_markdown_file_in_a_vault() {
         "a non-markdown file in a vault still uses the editor"
     );
     assert!(log.borrow().uris.is_empty());
+}
+
+// ---- Feature: `n` opens the current file in neovim ---------------------------------------
+
+#[test]
+fn n_opens_the_selected_file_in_neovim() {
+    // `n` hands the file to the injected neovim editor (a terminal takeover, forcing a full
+    // repaint), independent of the `e` editor and never routed to Obsidian.
+    let dir = TempDir::new();
+    std::fs::write(dir.path().join("a.rs"), "x\n").unwrap();
+    let (mut ctrl, _, editor_opened) = controller(dir.path(), false, StubGit::default(), false);
+    let nvim_opened: Recorder<PathBuf> = Arc::new(Mutex::new(Vec::new()));
+    ctrl.set_neovim_editor(Box::new(StubEditor {
+        opened: nvim_opened.clone(),
+        ..Default::default()
+    }));
+    let file = dir.path().join("a.rs");
+
+    let fx = ctrl.handle(Intent::OpenInNeovim);
+    assert!(fx.clear, "neovim took over the terminal → full repaint");
+    assert_eq!(
+        nvim_opened.lock().unwrap().as_slice(),
+        &[file],
+        "n opened the selected file in neovim"
+    );
+    assert!(
+        editor_opened.lock().unwrap().is_empty(),
+        "the `e` editor hand-off was not used for `n`"
+    );
+}
+
+#[test]
+fn n_reports_a_notice_when_neovim_is_not_configured() {
+    // With no neovim hand-off injected (e.g. a bare test controller), `n` is a non-fatal notice.
+    let dir = TempDir::new();
+    std::fs::write(dir.path().join("a.rs"), "x\n").unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+
+    let fx = ctrl.handle(Intent::OpenInNeovim);
+    assert!(
+        !fx.quit,
+        "a missing neovim hand-off does not end the session"
+    );
+    assert!(
+        ctrl.notices()
+            .iter()
+            .any(|n| n.contains("neovim not configured")),
+        "the missing hand-off is surfaced as a notice"
+    );
 }
 
 #[test]
