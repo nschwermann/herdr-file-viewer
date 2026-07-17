@@ -40,8 +40,8 @@ A config key always wins. Only two keys also have an environment-variable fallba
 config key and above the built-in default — `editor` (`$EDITOR`) and `update_check`
 (`$HERDR_FILE_VIEWER_NO_UPDATE_CHECK`) — giving those two a `config > env > default` chain. Every
 other key (`markdown`, `diff`, `syntax`, `open`, `reveal`, `neovim`, `hide_dotfiles`,
-`obsidian_editor`, `confirm_discard`, `scroll_lines`, `tree_width`, `tree_position`,
-`tree_max_cols`, `preview_max_lines`, `preview_max_kib`) has no
+`media_preview`, `obsidian_editor`, `confirm_discard`, `scroll_lines`, `tree_width`,
+`tree_position`, `tree_max_cols`, `preview_max_lines`, `preview_max_kib`) has no
 applicable environment variable; for those it's `config > default` only.
 
 ## Keys
@@ -61,6 +61,7 @@ reveal = "nautilus"
 
 hide_dotfiles = false       # true to hide dotfiles at startup (the `.` key still toggles)
 obsidian_editor = true      # `e` opens a vault .md in Obsidian (false = always use the editor)
+media_preview = true        # image/video placeholder + inline Enter-to-preview (false to disable)
 update_check = true         # false to disable the once-a-day update check
 confirm_discard = true      # false to discard annotations without confirming (on quit / worktree switch)
 scroll_lines = 3            # mouse-wheel step (content/search/help), a 1 to 10 scale: 1 slow · 3 medium · 6 fast · 10 max
@@ -94,6 +95,13 @@ either to view bigger files (`preview_max_lines` up to `100000`, `preview_max_ki
 One caveat for **diffs**: a diff is additionally bounded at ~4 MB by the git-capture step, independent
 of `preview_max_kib`. So raising `preview_max_kib` above ~4 MB widens how much *file content* is shown
 but not how much of a very large *diff* is (a diff past that bound is shown up to ~4 MB).
+
+`media_preview` controls the image/video preview. When on (the default), an image or video file
+shows a placeholder in the content pane naming its type, dimensions (for images, parsed from the
+header), and size; and on a terminal with an inline-graphics protocol **and** a backend on `PATH`
+(`chafa`/`kitten`/`timg`/`viu`), pressing `Enter` paints the media inline (a video via an `ffmpeg`
+poster frame). Set it to `false` to disable the feature entirely — media files then show the plain
+`[binary file]` placeholder. See [inline image & video preview](renderers.md#inline-image--video-preview).
 
 `obsidian_editor` decides what `e` does for a markdown note that lives inside an **Obsidian vault**
 — a directory whose ancestor contains a `.obsidian/` folder. When on (the default), pressing `e` on

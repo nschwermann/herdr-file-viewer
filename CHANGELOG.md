@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- Capability-gated **image/video preview**: media files show a placeholder (type, dimensions, size); on a terminal with an inline-graphics protocol (kitty/sixel/iterm2) and a backend (`chafa`/`kitten`/`timg`/`viu`), `Enter` paints the media inline (videos via an ffmpeg poster frame). Falls back to the placeholder — never escape garbage — when incapable; toggle with `media_preview = false`. → [renderers](docs/renderers.md#inline-image--video-preview)
 - `e` on a markdown note inside an Obsidian vault (an ancestor holds `.obsidian/`) opens it in Obsidian via the `obsidian://open` URI instead of the editor; toggle with `obsidian_editor = false`. Every other file and directory uses the editor hand-off unchanged. → [keys](docs/keys.md#opening-in-an-editor)
 - `n` always opens the current file in **neovim** (config `neovim`, default `nvim`), in the terminal — a suspend/exec/restore hand-off like `e`, independent of `$EDITOR` and never routed to Obsidian. → [keys](docs/keys.md#opening-in-an-editor)
 

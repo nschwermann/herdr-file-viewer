@@ -15,6 +15,10 @@ use herdr_file_viewer::controller::{
 use herdr_file_viewer::git::{Baseline, Status};
 use herdr_file_viewer::herdr::HerdrCli;
 use herdr_file_viewer::intent::Intent;
+use herdr_file_viewer::media::{
+    GraphicsProtocol, ImageBackend, MediaCapability, MediaKind, MediaOutcome, MediaViewer,
+    VideoTool,
+};
 use herdr_file_viewer::opener::{Opener, OpenerOutcome};
 use herdr_file_viewer::presenter::{Focus, PaneGeometry};
 use herdr_file_viewer::render::Renderers;
@@ -9590,6 +9594,7 @@ fn open_help_appends_settings_section_when_display_is_set() {
         reveal: None,
         hide_dotfiles: false,
         update_check: true,
+        media_preview: true,
         obsidian_editor: true,
         confirm_discard: true,
         scroll_lines: 3,
@@ -9904,6 +9909,114 @@ fn e_falls_back_to_editor_for_a_non_markdown_file_in_a_vault() {
         "a non-markdown file in a vault still uses the editor"
     );
     assert!(log.borrow().uris.is_empty());
+}
+
+// ---- Feature: capability-gated inline media preview --------------------------------------
+
+/// A test double for the media-preview seam: records every path it is asked to paint and returns
+/// `TookOver`, so no real backend runs and the terminal is never suspended (hermetic).
+struct StubMediaViewer {
+    viewed: Arc<Mutex<Vec<PathBuf>>>,
+}
+impl MediaViewer for StubMediaViewer {
+    fn view(&mut self, path: &Path, _kind: MediaKind) -> MediaOutcome {
+        self.viewed.lock().unwrap().push(path.to_path_buf());
+        MediaOutcome::TookOver
+    }
+}
+
+fn capable_media_cap() -> MediaCapability {
+    MediaCapability {
+        protocol: Some(GraphicsProtocol::Kitty),
+        image_backend: Some(ImageBackend::Chafa),
+        video_tool: Some(VideoTool::Ffmpeg),
+    }
+}
+
+#[test]
+fn enter_paints_a_capable_media_file_inline() {
+    // With a capable terminal + backend, Enter on an image hands it to the media viewer (a
+    // terminal takeover → full repaint) rather than zooming.
+    let dir = TempDir::new();
+    std::fs::write(dir.path().join("pic.png"), [0x89, b'P', b'N', b'G']).unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    let viewed = Arc::new(Mutex::new(Vec::new()));
+    ctrl.set_media_viewer(
+        capable_media_cap(),
+        Box::new(StubMediaViewer {
+            viewed: viewed.clone(),
+        }),
+    );
+    let file = dir.path().join("pic.png");
+
+    let fx = ctrl.handle(Intent::Activate);
+    assert!(
+        fx.clear,
+        "a media paint takes over the terminal → full repaint"
+    );
+    assert_eq!(
+        viewed.lock().unwrap().as_slice(),
+        &[file],
+        "Enter painted the image inline"
+    );
+    assert!(
+        !ctrl.view_state().zoomed,
+        "painting inline does not zoom the placeholder"
+    );
+}
+
+#[test]
+fn enter_zooms_media_when_the_terminal_is_incapable() {
+    // No image backend → the capability gate fails, so Enter falls through to the usual zoom of
+    // the media placeholder; the viewer seam is never called.
+    let dir = TempDir::new();
+    std::fs::write(dir.path().join("pic.png"), [0x89, b'P', b'N', b'G']).unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    let viewed = Arc::new(Mutex::new(Vec::new()));
+    let incapable = MediaCapability {
+        protocol: Some(GraphicsProtocol::Kitty),
+        image_backend: None,
+        video_tool: None,
+    };
+    ctrl.set_media_viewer(
+        incapable,
+        Box::new(StubMediaViewer {
+            viewed: viewed.clone(),
+        }),
+    );
+
+    let fx = ctrl.handle(Intent::Activate);
+    assert!(!fx.clear, "no capable backend → no terminal takeover");
+    assert!(
+        viewed.lock().unwrap().is_empty(),
+        "an incapable terminal never calls the media viewer"
+    );
+    assert!(
+        ctrl.view_state().zoomed,
+        "Enter zooms the media placeholder instead"
+    );
+}
+
+#[test]
+fn enter_on_a_non_media_file_never_paints() {
+    // A capable media viewer is wired, but a `.rs` is not media → normal zoom, no paint.
+    let dir = TempDir::new();
+    std::fs::write(dir.path().join("code.rs"), "fn main() {}\n").unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    let viewed = Arc::new(Mutex::new(Vec::new()));
+    ctrl.set_media_viewer(
+        capable_media_cap(),
+        Box::new(StubMediaViewer {
+            viewed: viewed.clone(),
+        }),
+    );
+
+    ctrl.handle(Intent::Activate);
+    assert!(
+        viewed.lock().unwrap().is_empty(),
+        "a code file is not painted"
+    );
+    assert!(ctrl.view_state().zoomed, "a code file zooms as before");
 }
 
 // ---- Feature: `n` opens the current file in neovim ---------------------------------------

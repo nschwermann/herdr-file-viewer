@@ -121,6 +121,11 @@ pub struct Config {
     pub reveal: Option<String>,
     pub hide_dotfiles: Option<bool>,
     pub update_check: Option<bool>,
+    /// Whether the content pane previews image/video files: a rich placeholder (type, dimensions,
+    /// size) and, on a capable terminal with a backend, an inline `Enter`-to-view preview. `None`
+    /// falls back to `true`. When `false`, media files show the plain `[binary file]` placeholder
+    /// and `Enter` just zooms.
+    pub media_preview: Option<bool>,
     /// Whether the `e` key opens a markdown file that lives inside an Obsidian vault in Obsidian
     /// (via the `obsidian://open` URI) instead of the configured editor. `None` falls back to
     /// `true`. Only affects `.md` files under a directory whose ancestor holds a `.obsidian/`
@@ -278,6 +283,9 @@ pub struct EffectiveSettings {
     pub reveal: Option<Vec<String>>,
     pub hide_dotfiles: bool,
     pub update_check: bool,
+    /// The effective **media-preview** switch: the config `media_preview` when present, else
+    /// `true`. Config-or-default (no env var).
+    pub media_preview: bool,
     /// The effective **open-vault-markdown-in-Obsidian** switch: the config `obsidian_editor` when
     /// present, else `true`. Config-or-default (no env var).
     pub obsidian_editor: bool,
@@ -364,6 +372,10 @@ pub fn resolve(config: &Config, get_env: impl Fn(&str) -> Option<String>) -> Eff
 
     let hide_dotfiles = config.hide_dotfiles.unwrap_or(false);
 
+    // Config > default; no env var. Defaults ON: media files get the rich placeholder + inline
+    // preview when the terminal is capable.
+    let media_preview = config.media_preview.unwrap_or(true);
+
     // Config > default; no env var. Defaults ON: a vault `.md` opens in Obsidian, every other file
     // still uses the editor hand-off.
     let obsidian_editor = config.obsidian_editor.unwrap_or(true);
@@ -443,6 +455,7 @@ pub fn resolve(config: &Config, get_env: impl Fn(&str) -> Option<String>) -> Eff
         reveal,
         hide_dotfiles,
         update_check,
+        media_preview,
         obsidian_editor,
         confirm_discard,
         scroll_lines,

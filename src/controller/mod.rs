@@ -557,6 +557,14 @@ pub struct Controller {
     /// post-construction via [`set_neovim_editor`](Self::set_neovim_editor) (like `opener`);
     /// `None` in tests that never wire it, in which case `n` reports "neovim not configured".
     neovim_editor: Option<Box<dyn EditorHandoff>>,
+    /// The detected terminal graphics capability (protocol + backend + video tool) for the inline
+    /// media preview. Default-empty (all `None`) so a test controller can never paint; set at
+    /// wiring from `media::detect()` when `media_preview` is on. Gates whether `Enter` on a media
+    /// file paints it inline vs. zooms the placeholder.
+    media_cap: crate::media::MediaCapability,
+    /// The read-only media-preview seam (suspend/paint/resume over the terminal). `None` in tests
+    /// and when `media_preview` is off; injected via [`set_media_viewer`](Self::set_media_viewer).
+    media_viewer: Option<Box<dyn crate::media::MediaViewer>>,
     clipboard: Box<dyn Clipboard>,
     /// The provider factory (ADR-0004), kept so a re-root can rebuild the root-bound providers
     /// (Git Service + Content Renderer) against the new root.
@@ -764,6 +772,8 @@ impl Controller {
             git,
             editor,
             neovim_editor: None,
+            media_cap: crate::media::MediaCapability::default(),
+            media_viewer: None,
             clipboard,
             providers,
             renderers,
@@ -1158,6 +1168,19 @@ impl Controller {
     /// wires the live neovim launcher. When unset, `n` reports "neovim not configured".
     pub fn set_neovim_editor(&mut self, editor: Box<dyn EditorHandoff>) {
         self.neovim_editor = Some(editor);
+    }
+
+    /// Inject the inline media-preview seam and the detected capability (only when `media_preview`
+    /// is on). Post-construction, like [`set_opener`](Self::set_opener). With this set and a
+    /// capable terminal, `Enter` on an image/video paints it inline; otherwise `Enter` zooms the
+    /// content pane's media placeholder as usual.
+    pub fn set_media_viewer(
+        &mut self,
+        cap: crate::media::MediaCapability,
+        viewer: Box<dyn crate::media::MediaViewer>,
+    ) {
+        self.media_cap = cap;
+        self.media_viewer = Some(viewer);
     }
 
     /// Install the effective key bindings resolved from the registry + the config's `[keys]` table,
@@ -1826,9 +1849,45 @@ impl Controller {
                 Effects::redraw()
             }
             NodeKind::File => {
+                // A capable terminal + backend paints an image/video inline over a suspended
+                // terminal (never into the ratatui frame). Otherwise fall through to zoom, which
+                // reads the media placeholder (type/dimensions/size) full-screen.
+                if let Some(kind) = crate::media::classify(&node.path)
+                    && self.media_cap.can_show(kind)
+                    && self.media_viewer.is_some()
+                {
+                    let path = node.path.clone();
+                    return self.preview_media(&path, kind);
+                }
                 self.zoomed = true;
                 self.focus = Focus::Content;
                 Effects::redraw()
+            }
+        }
+    }
+
+    /// Paint a media file inline via the injected [`MediaViewer`](crate::media::MediaViewer) seam
+    /// (suspend the TUI, render over the clean terminal, wait, resume). The paint drew over the
+    /// screen, so a full repaint follows (`clear`). A failure is a non-fatal notice; nothing is
+    /// ever written to the previewed file (AC-N1). Guarded by [`activate`](Self::activate) to a
+    /// media file the capability can actually show.
+    fn preview_media(&mut self, path: &Path, kind: crate::media::MediaKind) -> Effects {
+        let Some(viewer) = self.media_viewer.as_mut() else {
+            return Effects::noop();
+        };
+        match viewer.view(path, kind) {
+            crate::media::MediaOutcome::TookOver => Effects {
+                redraw: true,
+                clear: true,
+                ..Default::default()
+            },
+            crate::media::MediaOutcome::Failed(reason) => {
+                self.action_notice = Some(format!("Could not preview media: {reason}"));
+                Effects {
+                    redraw: true,
+                    clear: true,
+                    ..Default::default()
+                }
             }
         }
     }

@@ -17,7 +17,7 @@ is additive and on by default.
 | `H` (Shift+`h`) | Scroll the **tree** pane left (long / deeply-nested rows), inert unless the tree is focused |
 | `L` (Shift+`l`) | Focus-gated: with the **tree** focused, scroll it right (long / deeply-nested rows); with the **content pane** focused (or zoomed), enter **line-select mode** to select lines and copy either a `file:line` reference or the content itself (see [below](#copy-a-line-reference-or-line-content-l)) |
 | _line-select mode_ | `j`/`k` (or `↑`/`↓`) move the marker, `Shift`+move (`J`/`K`, Shift+`↑`/`↓`) extends a line selection; **click-drag** with the mouse selects **text** (character-granular); `a` adds an annotation for the selected line/range, `Enter` copies the `path:line` / `path:start-end` **reference**, `y`/`Y` copies the selected **content**, `Esc` exits |
-| `Enter` | Activate the selection: expand/collapse a directory, or open a file in **zoom mode** (content full-screen) |
+| `Enter` | Activate the selection: expand/collapse a directory, or open a file in **zoom mode** (content full-screen). On an **image/video** file, when the terminal supports inline graphics and a backend is installed, paints the media inline instead (see [renderers](renderers.md#inline-image--video-preview)) |
 | `i` | Toggle gitignored files |
 | `.` | Toggle hidden (dot-prefixed) files and folders |
 | `c` | Toggle changed-files-only |

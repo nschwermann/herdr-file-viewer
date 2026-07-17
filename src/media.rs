@@ -408,11 +408,9 @@ pub fn placeholder(
     dimensions: Option<(u32, u32)>,
     cap: &MediaCapability,
 ) -> String {
-    let icon = match kind {
-        MediaKind::Image => "🖼",
-        MediaKind::Video => "🎬",
-    };
-    let mut lines = vec![format!("{icon}  {file_name}"), String::new()];
+    // No emoji in the header: some terminals render image/video emoji double-width while
+    // unicode-width reports single, which would misalign the pane by a cell. A plain label is safe.
+    let mut lines = vec![format!("[{}]  {file_name}", kind.label()), String::new()];
     lines.push(format!("Type:  {}", kind.label()));
     if let Some((w, h)) = dimensions {
         lines.push(format!("Size:  {w} × {h} px"));

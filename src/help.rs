@@ -776,6 +776,7 @@ mod tests {
             reveal: None,
             hide_dotfiles: true,
             update_check: false,
+            media_preview: true,
             obsidian_editor: true,
             confirm_discard: false,
             scroll_lines: 7,

@@ -64,6 +64,16 @@ pub fn run() -> io::Result<()> {
     // and byte-converted). `Copy`, so the factory closure below captures it by value.
     let caps = eff.preview_caps();
 
+    // Media preview (config `media_preview`): detect the terminal graphics capability once (cheap +
+    // cached) when enabled, else stay empty so media files show the plain binary placeholder. Both
+    // are `Copy`/`bool`, captured by value into the factory closure.
+    let media_preview = eff.media_preview;
+    let media_cap = if media_preview {
+        crate::media::detect()
+    } else {
+        crate::media::MediaCapability::default()
+    };
+
     // The root-bound providers are built by a factory so a later re-root rebuilds them against
     // the new root (ADR-0004). Non-capturing — it reads the passed `Resolved`, so re-root gets
     // the new root's git/renderer rather than closing over the launch root.
@@ -83,6 +93,8 @@ pub fn run() -> io::Result<()> {
                 root: resolved.root.clone(),
                 renderers: factory_renderers.clone(),
                 caps,
+                media_preview,
+                media_cap,
             });
             RootProviders { git, content }
         });
@@ -186,6 +198,19 @@ pub fn run() -> io::Result<()> {
         crate::opener::CommandOpener::new(current_os_kind(), Box::new(OpenerSpawner))
             .with_overrides(to_argv(eff.open.clone()), to_argv(eff.reveal.clone())),
     ));
+    // Inject the inline media-preview seam (config `media_preview`): `Enter` on an image/video
+    // paints it over a suspended terminal via the detected backend. Only wired when the preview is
+    // enabled; the controller's own capability gate (`media_cap.can_show`) still decides per file,
+    // so on an incapable terminal `Enter` just zooms the placeholder instead.
+    if media_preview {
+        controller.set_media_viewer(
+            media_cap,
+            Box::new(LiveMediaViewer {
+                cap: media_cap,
+                poster_salt: 0,
+            }),
+        );
+    }
 
     let mut terminal = ratatui::try_init()?;
     // Mouse is additive to the keyboard-first design (AC-18): herdr forwards mouse events to a
@@ -416,6 +441,35 @@ struct LiveContent {
     /// The size caps (line + byte) for classifying/previewing content, resolved from config
     /// (`preview_max_lines` / `preview_max_kib`) at startup. `Copy`.
     caps: Caps,
+    /// Whether image/video files get the media placeholder (config `media_preview`). When off,
+    /// they fall through to the plain binary placeholder.
+    media_preview: bool,
+    /// The detected terminal graphics capability, for the placeholder's "inline preview available"
+    /// line. Empty when `media_preview` is off.
+    media_cap: crate::media::MediaCapability,
+}
+
+impl LiveContent {
+    /// Build the content-pane result for an image/video file: a plain-text placeholder naming the
+    /// type, its dimensions (cheaply parsed for images), its size, and whether an inline preview is
+    /// available. Read-only (a bounded header read for dimensions + a metadata size stat); never
+    /// emits raw bytes or escapes. Runs on the render worker like every other content render.
+    fn media_result(&self, path: &Path, kind: crate::media::MediaKind) -> RenderResult {
+        let name = path.file_name().and_then(OsStr::to_str).unwrap_or("");
+        let size = std::fs::metadata(path).map(|m| m.len()).ok();
+        let dimensions = match kind {
+            crate::media::MediaKind::Image => crate::media::image_dimensions(path),
+            crate::media::MediaKind::Video => None,
+        };
+        let text = crate::media::placeholder(kind, name, size, dimensions, &self.media_cap);
+        RenderResult {
+            // Route through `to_text` so the (untrusted) file name in the placeholder is
+            // escape-neutralized like all other displayed content (AC-27).
+            content: render::to_text(&text),
+            notices: Vec::new(),
+            source: None,
+        }
+    }
 }
 
 impl ContentProvider for LiveContent {
@@ -431,6 +485,14 @@ impl ContentProvider for LiveContent {
         raw_diff: Option<&str>,
         width: Option<u16>,
     ) -> RenderResult {
+        // An image/video file shows the media placeholder (type/dimensions/size + capability),
+        // regardless of view mode — media has no meaningful diff/syntax view. This replaces the
+        // `[binary file]` placeholder for recognized media when `media_preview` is on.
+        if self.media_preview
+            && let Some(kind) = crate::media::classify(path)
+        {
+            return self.media_result(path, kind);
+        }
         // Both diff modes render from git's diff text, not the file bytes — so a deleted or
         // binary file still shows its diff (AC-9), and there is no point classifying (a wasted
         // bounded file read). Other modes classify first (binary / size guards, AC-12/13).
@@ -706,6 +768,139 @@ fn resume_tui() -> io::Result<()> {
     let _ = execute!(io::stdout(), EnableMouseCapture);
     let _ = execute!(io::stdout(), EnableFocusChange);
     Ok(())
+}
+
+/// The live media-preview seam (the `Enter`-on-media paint). It suspends the TUI, paints an image
+/// — or a video's extracted poster frame — over the **clean, non-alternate** screen via the
+/// detected backend, waits for the user, then resumes. The graphics-protocol bytes therefore reach
+/// a real terminal that supports them (this seam is only wired when the capability is present), and
+/// never the ratatui frame buffer, so an incapable terminal is never sent escape garbage. Read-only:
+/// a video poster is written only to a temp scratch file, removed afterward; the source is untouched.
+struct LiveMediaViewer {
+    cap: crate::media::MediaCapability,
+    /// A per-call salt so a session's poster scratch paths never collide.
+    poster_salt: u64,
+}
+
+impl crate::media::MediaViewer for LiveMediaViewer {
+    fn view(&mut self, path: &Path, kind: crate::media::MediaKind) -> crate::media::MediaOutcome {
+        use crate::media::{MediaKind, MediaOutcome};
+        let (Some(backend), Some(protocol)) = (self.cap.image_backend, self.cap.protocol) else {
+            return MediaOutcome::Failed("no inline image backend".into());
+        };
+
+        // Resolve the image to paint. For a video, extract a representative poster frame first
+        // (to a temp file we clean up); for an image, paint it directly.
+        let mut cleanup: Option<PathBuf> = None;
+        let image: PathBuf = match kind {
+            MediaKind::Image => path.to_path_buf(),
+            MediaKind::Video => {
+                let Some(tool) = self.cap.video_tool else {
+                    return MediaOutcome::Failed("no video poster tool (install ffmpeg)".into());
+                };
+                self.poster_salt = self.poster_salt.wrapping_add(1);
+                let out = crate::media::poster_scratch(path, self.poster_salt);
+                let argv =
+                    crate::media::video_poster_argv(tool, path, &out, ffprobe_duration(path));
+                if !run_quiet(&argv) || !out.is_file() {
+                    let _ = std::fs::remove_file(&out);
+                    return MediaOutcome::Failed("could not extract a poster frame".into());
+                }
+                cleanup = Some(out.clone());
+                out
+            }
+        };
+
+        // Suspend so the backend paints onto a clean screen; always resume afterward.
+        if suspend_tui().is_err() {
+            let _ = resume_tui();
+            if let Some(p) = cleanup {
+                let _ = std::fs::remove_file(p);
+            }
+            return MediaOutcome::Failed("could not suspend the terminal".into());
+        }
+        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        let paint_rows = rows.saturating_sub(3).max(1); // leave room for the header + prompt
+        let name = path.file_name().and_then(OsStr::to_str).unwrap_or("");
+        {
+            let mut out = io::stdout();
+            let _ = write!(out, "\r\n  {name}\r\n\r\n");
+            let _ = out.flush();
+        }
+        let argv = crate::media::image_argv(backend, protocol, &image, cols, paint_rows);
+        let painted = run_inherit(&argv);
+        {
+            let mut out = io::stdout();
+            let _ = write!(out, "\r\n\r\n  Press Enter to return to the viewer… ");
+            let _ = out.flush();
+        }
+        // Cooked mode after suspend: read a line so the user can view before we resume.
+        let mut buf = String::new();
+        let _ = io::stdin().read_line(&mut buf);
+        let _ = resume_tui();
+        if let Some(p) = cleanup {
+            let _ = std::fs::remove_file(p);
+        }
+        if painted {
+            MediaOutcome::TookOver
+        } else {
+            MediaOutcome::Failed("the image backend failed".into())
+        }
+    }
+}
+
+/// Run a command discarding all stdio, returning whether it exited 0. For the poster extraction,
+/// whose logs must not land on the screen.
+fn run_quiet(argv: &[String]) -> bool {
+    let Some((prog, args)) = argv.split_first() else {
+        return false;
+    };
+    Command::new(prog)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Run a command inheriting stdio so it paints to the (suspended) terminal; returns whether it
+/// exited 0.
+fn run_inherit(argv: &[String]) -> bool {
+    let Some((prog, args)) = argv.split_first() else {
+        return false;
+    };
+    Command::new(prog)
+        .args(args)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Best-effort video duration in seconds via `ffprobe`, for ffmpeg's ~10% poster seek. `None` when
+/// ffprobe is absent or its output is unparseable — the argv builder then uses a small fixed seek.
+fn ffprobe_duration(path: &Path) -> Option<f64> {
+    let out = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nk=1:nw=1",
+        ])
+        .arg(path)
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse::<f64>()
+        .ok()
 }
 
 /// Resolve glow's `-s` style argument: the bundled palette style if it ships in the
@@ -1222,6 +1417,8 @@ mod tests {
                 timeout: Duration::from_secs(5),
             },
             caps: Caps::default(),
+            media_preview: false,
+            media_cap: crate::media::MediaCapability::default(),
         }
     }
 
@@ -1248,6 +1445,8 @@ mod tests {
                 max_lines: 50,
                 max_bytes: 1024 * 1024,
             },
+            media_preview: false,
+            media_cap: crate::media::MediaCapability::default(),
         };
         let out = content.render_at_width(&file, ViewMode::SyntaxContent, None, None);
         assert!(
@@ -1255,6 +1454,72 @@ mod tests {
             "the configured 50-line cap must reach classify through LiveContent: {:?}",
             out.notices
         );
+    }
+
+    #[test]
+    fn livecontent_renders_a_media_placeholder_and_degrades_with_no_backend() {
+        // The graceful-fallback proof: with `media_preview` on but an EMPTY capability (no
+        // protocol, no backend — the "no backend installed" case), an image renders the plain
+        // placeholder (type, parsed dimensions, size) instead of `[binary file]`, and never emits
+        // an escape byte to an incapable terminal.
+        let root = tmp("media-placeholder");
+        let img = root.join("photo.png");
+        // A minimal valid PNG header so dimensions parse (64x48).
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        png.extend_from_slice(&[0, 0, 0, 13]);
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&64u32.to_be_bytes());
+        png.extend_from_slice(&48u32.to_be_bytes());
+        std::fs::write(&img, &png).unwrap();
+
+        let content = LiveContent {
+            root: root.clone(),
+            renderers: default_renderers(),
+            caps: Caps::default(),
+            media_preview: true,
+            media_cap: crate::media::MediaCapability::default(), // no protocol, no backend
+        };
+        let out = content.render_at_width(&img, ViewMode::SyntaxContent, None, None);
+        let text: String = out
+            .content
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("photo.png"), "names the file: {text}");
+        assert!(text.contains("image"), "names the media type: {text}");
+        assert!(
+            text.contains("64 × 48"),
+            "shows the parsed dimensions: {text}"
+        );
+        assert!(
+            text.to_lowercase().contains("no inline"),
+            "carries a degraded 'no inline …' notice: {text}"
+        );
+        assert!(!text.contains('\u{1b}'), "never emits an escape byte");
+        // And the toggle off: an image falls through to the normal binary placeholder.
+        let off = LiveContent {
+            root: root.clone(),
+            renderers: default_renderers(),
+            caps: Caps::default(),
+            media_preview: false,
+            media_cap: crate::media::MediaCapability::default(),
+        };
+        let out = off.render_at_width(&img, ViewMode::SyntaxContent, None, None);
+        let text: String = out
+            .content
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(
+            text.contains("binary file"),
+            "media_preview = false → the plain binary placeholder: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]
