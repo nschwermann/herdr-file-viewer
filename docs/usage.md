@@ -118,6 +118,10 @@ not, by rewriting the note before it is rendered. These apply to any markdown no
   titled, bordered box rather than a literal `[!note]` blockquote. A custom title after the type is
   kept (`> [!warning] Heads up`), and a foldable marker (`> [!note]-` / `+`) shows a `▸` / `▾`
   indicator. Unknown types fall back to a generic titled box.
+- **Task checkboxes.** Task-list items render with checkbox glyphs — `- [ ]` as `☐` and `- [x]` as
+  `☑` — so a to-do reads as a checklist. This is **display only**: the viewer is read-only
+  (see the [constitution](../constitution.md)), so it never writes a toggled state back to the file —
+  edit the note in your editor (`e`, or `n` for neovim) to change a checkbox.
 
 ## Annotating files and ranges
 

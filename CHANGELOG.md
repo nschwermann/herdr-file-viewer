@@ -13,6 +13,7 @@ All notable changes to this project are documented here. The format is based on
 - `n` always opens the current file in **neovim** (config `neovim`, default `nvim`), in the terminal — a suspend/exec/restore hand-off like `e`, independent of `$EDITOR` and never routed to Obsidian. → [keys](docs/keys.md#opening-in-an-editor)
 - Inline **wikilink navigation** for a markdown note inside an Obsidian vault: `g` opens a link navigator listing the note's `[[wikilinks]]` / `![[embeds]]` / relative markdown links; `Enter` follows the selected link to that note in-viewer. Targets resolve vault-wide (shortest-unique-path); unresolved links are shown as such and never followed; a `#heading` / `#^block` anchor scrolls the opened note to it. `[` / `]` walk a browser-style back/forward history of the notes you visit. → [keys](docs/keys.md)
 - **Obsidian callouts** in the rendered markdown view: `> [!note]` / `[!warning]` / `[!tip]` … blocks render as titled, bordered boxes (with the custom title and a foldable `+`/`-` indicator) instead of a literal `[!note]` blockquote. → [usage](docs/usage.md#obsidian-markdown-rendering)
+- **Task checkboxes** in the rendered markdown view: `- [ ]` / `- [x]` render as `☐` / `☑` glyphs. Display only — the read-only viewer never writes a toggled state back (edit with `e`/`n`). → [usage](docs/usage.md#obsidian-markdown-rendering)
 
 ### Changed
 - The in-file search next/previous-match keys moved from `n`/`N` to **`m`/`M`** (freeing `n` for open-in-neovim). Remap them via `[keys]` if you prefer. → [keys](docs/keys.md)

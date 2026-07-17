@@ -481,10 +481,14 @@ fn map_prepared_text(prepared: Prepared, f: impl Fn(&str) -> String) -> Prepared
 
 impl LiveContent {
     /// The Obsidian markdown transforms applied to a note's source before glow renders it (the
-    /// rendered-markdown view only). Rewrites callouts (`> [!note]`) into titled blockquotes.
-    /// Pure over the prepared text; a binary/placeholder passes through.
+    /// rendered-markdown view only): rewrite callouts (`> [!note]`) into titled blockquotes, and
+    /// task-list markers (`- [ ]` / `- [x]`) into `☐` / `☑` glyphs. Rendering only — the read-only
+    /// viewer never writes a toggled checkbox back to the file (constitution §1). Pure over the
+    /// prepared text; a binary/placeholder passes through.
     fn transform_markdown(&self, prepared: Prepared) -> Prepared {
-        map_prepared_text(prepared, crate::mdnote::transform_callouts)
+        map_prepared_text(prepared, |t| {
+            crate::mdnote::transform_tasks(&crate::mdnote::transform_callouts(t))
+        })
     }
 
     /// Build the content-pane result for an image/video file: a plain-text placeholder naming the
@@ -1615,6 +1619,30 @@ mod tests {
         assert!(
             flatten_content(&raw).contains("[!warning]"),
             "the source view shows the untransformed note"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rendered_markdown_transforms_task_checkboxes() {
+        let root = tmp("md-tasks");
+        let md = root.join("todo.md");
+        std::fs::write(&md, "- [ ] open task\n- [x] done task\n").unwrap();
+        let content = cat_md_content(&root);
+        let out = content.render_at_width(&md, ViewMode::RenderedMarkdown, None, None);
+        let text = flatten_content(&out);
+        assert!(text.contains('☐'), "unchecked box glyph: {text}");
+        assert!(text.contains('☑'), "checked box glyph: {text}");
+        assert!(
+            !text.contains("[ ]"),
+            "the raw `[ ]` marker is replaced: {text}"
+        );
+        // Source view untouched.
+        let raw = content.render_at_width(&md, ViewMode::SyntaxContent, None, None);
+        assert!(
+            flatten_content(&raw).contains("[ ]"),
+            "source view keeps `[ ]`"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
