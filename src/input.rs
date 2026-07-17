@@ -367,6 +367,27 @@ pub(crate) const REGISTRY: &[Binding] = &[
         category: "Search & jump",
     },
     Binding {
+        intent: Intent::OpenLinkNav,
+        name: "open_link_nav",
+        default_keys: &[KeyCode::Char('g')],
+        description: "Open the wikilink navigator for the current note.",
+        category: "Search & jump",
+    },
+    Binding {
+        intent: Intent::NavBack,
+        name: "nav_back",
+        default_keys: &[KeyCode::Char('[')],
+        description: "Go back to the previous note (link navigation).",
+        category: "Search & jump",
+    },
+    Binding {
+        intent: Intent::NavForward,
+        name: "nav_forward",
+        default_keys: &[KeyCode::Char(']')],
+        description: "Go forward (link navigation).",
+        category: "Search & jump",
+    },
+    Binding {
         intent: Intent::TreeScrollLeft,
         name: "tree_scroll_left",
         default_keys: &[KeyCode::Char('H')],
@@ -705,6 +726,9 @@ mod tests {
         (KeyCode::Char('/'), Intent::OpenSearch),
         (KeyCode::Char('m'), Intent::NextMatch),
         (KeyCode::Char('M'), Intent::PrevMatch),
+        (KeyCode::Char('g'), Intent::OpenLinkNav),
+        (KeyCode::Char('['), Intent::NavBack),
+        (KeyCode::Char(']'), Intent::NavForward),
         (KeyCode::Char('H'), Intent::TreeScrollLeft),
         (KeyCode::Char('L'), Intent::TreeScrollRight),
         (KeyCode::Char('O'), Intent::OpenWithApp),
@@ -825,7 +849,7 @@ mod tests {
 
     #[test]
     fn unmapped_keys_are_a_noop() {
-        assert_eq!(map_key(k(KeyCode::Char('g'))), None);
+        assert_eq!(map_key(k(KeyCode::Char('d'))), None);
         assert_eq!(map_key(k(KeyCode::Char('x'))), None);
         assert_eq!(map_key(k(KeyCode::F(1))), None);
         assert_eq!(map_key(k(KeyCode::Backspace)), None);
@@ -1384,30 +1408,30 @@ mod tests {
     #[test]
     fn resolve_duplicate_key_clash_rejects_both_ac15() {
         // AC-15: two entries claiming one key both revert to their defaults.
-        let (b, out) = resolve_with(&[("refresh", one("g")), ("open_finder", one("g"))]);
+        let (b, out) = resolve_with(&[("refresh", one("x")), ("open_finder", one("x"))]);
         assert_eq!(out.rejected.len(), 2, "both clashing entries are rejected");
         assert_eq!(dec(&b, KeyCode::Char('r')), Some(Intent::Refresh));
         assert_eq!(dec(&b, KeyCode::Char('f')), Some(Intent::OpenFinder));
         assert_eq!(
-            dec(&b, KeyCode::Char('g')),
+            dec(&b, KeyCode::Char('x')),
             None,
-            "the clashed key 'g' decodes to nothing"
+            "the clashed key 'x' decodes to nothing"
         );
     }
 
     #[test]
     fn resolve_bad_key_token_rejects_whole_entry_ac12() {
         // AC-12: any unparseable token in a spec rejects the whole entry (the intent keeps defaults).
-        let (b, out) = resolve_with(&[("refresh", many(&["g", "Ctrl+x"]))]);
+        let (b, out) = resolve_with(&[("refresh", many(&["x", "Ctrl+x"]))]);
         assert!(
             out.rejected
                 .iter()
                 .any(|r| r.name == "refresh" && matches!(r.reason, RejectReason::BadKeySpec(_))),
         );
         assert_eq!(
-            dec(&b, KeyCode::Char('g')),
+            dec(&b, KeyCode::Char('x')),
             None,
-            "the whole entry is rejected, so its parseable key 'g' is not bound"
+            "the whole entry is rejected, so its parseable key 'x' is not bound"
         );
         assert_eq!(dec(&b, KeyCode::Char('r')), Some(Intent::Refresh));
     }

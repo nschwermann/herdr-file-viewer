@@ -134,6 +134,19 @@ pub enum Intent {
     /// [`Intent::TreeScrollLeft`] it only moves the in-pane scroll; no mutation. Bound to `L`
     /// (Shift+`l`) only — no event hook (AC-N6). Inert unless the tree is focused.
     TreeScrollRight,
+    /// Open the wikilink navigator overlay for the current markdown-in-vault note (`g`): a
+    /// centered list of the note's followable links. Read-only navigation — it navigates the
+    /// viewer's selection between notes; it never modifies any file (AC-N1, AC-N3). Opens only
+    /// when the displayed file is a markdown note inside an Obsidian vault; otherwise it shows a
+    /// notice and opens nothing.
+    OpenLinkNav,
+    /// Go back to the previously-viewed note in the link-navigation history (`[`). Read-only
+    /// navigation — it re-reveals an already-visited note; no file or git mutation (AC-N1). A
+    /// no-op notice when the back-stack is empty.
+    NavBack,
+    /// Go forward in the link-navigation history (`]`), the inverse of [`Intent::NavBack`].
+    /// Read-only navigation; a no-op notice when the forward-stack is empty.
+    NavForward,
     /// Close the viewer and return control to the prior pane (AC-20).
     Close,
 }
@@ -141,7 +154,7 @@ pub enum Intent {
 impl Intent {
     /// Every intent variant — lets the dispatcher and tests enumerate the closed set so
     /// keyboard-completeness (AC-18) and the no-file/git-mutation invariant (AC-N3) stay checkable.
-    pub const ALL: [Intent; 36] = [
+    pub const ALL: [Intent; 39] = [
         Intent::NavUp,
         Intent::NavDown,
         Intent::Expand,
@@ -176,6 +189,9 @@ impl Intent {
         Intent::PrevMatch,
         Intent::TreeScrollLeft,
         Intent::TreeScrollRight,
+        Intent::OpenLinkNav,
+        Intent::NavBack,
+        Intent::NavForward,
         Intent::ShowHelp,
         Intent::Close,
     ];
@@ -227,6 +243,9 @@ mod tests {
                 | Intent::PrevMatch
                 | Intent::TreeScrollLeft
                 | Intent::TreeScrollRight
+                | Intent::OpenLinkNav
+                | Intent::NavBack
+                | Intent::NavForward
                 | Intent::ShowHelp
                 | Intent::Close => (false, false),
             };
@@ -301,12 +320,19 @@ mod tests {
     }
 
     #[test]
-    fn all_length_is_36() {
+    fn all_length_is_39() {
         assert_eq!(
             Intent::ALL.len(),
-            36,
-            "Intent::ALL must have exactly 36 variants after adding OpenInNeovim"
+            39,
+            "Intent::ALL must have exactly 39 variants after adding the wikilink-navigation intents"
         );
+    }
+
+    #[test]
+    fn link_nav_intents_are_in_all() {
+        assert!(Intent::ALL.contains(&Intent::OpenLinkNav));
+        assert!(Intent::ALL.contains(&Intent::NavBack));
+        assert!(Intent::ALL.contains(&Intent::NavForward));
     }
 
     #[test]

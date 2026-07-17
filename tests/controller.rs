@@ -10313,3 +10313,288 @@ fn reveal_non_zero_exit_sets_a_non_fatal_notice() {
     );
     assert!(!fx.quit, "AC-8: a non-zero exit does not end the session");
 }
+
+// ── Inline wikilink navigation (`g` link navigator + `[`/`]` back/forward) ──────────────────
+
+/// Poll until the displayed content's title (derived from `content_path`) is `name`, or time out.
+/// Used to confirm a selection's render has landed so `content_path` is populated (the back-stack
+/// pushes it when following a link).
+fn await_content_title(ctrl: &mut Controller, name: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while ctrl.view_state().content_title.as_deref() != Some(name) {
+        ctrl.poll();
+        assert!(
+            Instant::now() < deadline,
+            "content_title never became {name}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// The absolute path of the currently-selected tree node (updated synchronously by `reveal`).
+fn selected_path(ctrl: &Controller) -> Option<PathBuf> {
+    ctrl.tree().selected().map(|n| n.path)
+}
+
+/// Move the tree cursor onto `path` (by name) and let its render land so `content_path` is set.
+fn select_and_settle(ctrl: &mut Controller, path: &Path, name: &str) {
+    let n = ctrl.tree().visible_nodes().len();
+    for _ in 0..=n {
+        if selected_path(ctrl).as_deref() == Some(path) {
+            break;
+        }
+        ctrl.handle(Intent::NavDown);
+    }
+    assert_eq!(
+        selected_path(ctrl).as_deref(),
+        Some(path),
+        "precondition: {name} is selected"
+    );
+    await_content_title(ctrl, name);
+}
+
+/// A vault temp dir with `Home.md` (a resolved `[[Target]]` link + an unresolved `[[Missing Note]]`)
+/// and `Target.md`, plus the `.obsidian/` marker that makes it an Obsidian vault. Returns the dir
+/// and a controller whose selection has settled on `Home.md`.
+fn link_nav_vault() -> (TempDir, Controller) {
+    let dir = TempDir::new();
+    std::fs::create_dir(dir.path().join(".obsidian")).unwrap();
+    std::fs::write(
+        dir.path().join("Home.md"),
+        "# Home\n\n[[Target]]\n\n[[Missing Note]]\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("Target.md"), "# Target\n\nbody\n").unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    ctrl.set_content_viewport(60, 20); // a content column is visible (no forced zoom)
+    let home = dir.path().join("Home.md");
+    select_and_settle(&mut ctrl, &home, "Home.md");
+    (dir, ctrl)
+}
+
+#[test]
+fn g_on_vault_markdown_populates_resolved_and_unresolved_links() {
+    let (_dir, mut ctrl) = link_nav_vault();
+    let fx = ctrl.handle(Intent::OpenLinkNav);
+    assert!(fx.redraw);
+    assert!(ctrl.link_nav_open(), "the navigator opens on a vault note");
+
+    let rows = ctrl
+        .view_state()
+        .link_nav
+        .expect("link_nav view present")
+        .rows;
+    assert_eq!(rows.len(), 2, "Home.md has two followable links");
+    // Row 0 is the resolved [[Target]]; row 1 the unresolved [[Missing Note]].
+    assert_eq!(rows[0].display, "Target");
+    assert!(rows[0].resolved, "[[Target]] resolves to Target.md");
+    assert_eq!(rows[1].display, "Missing Note");
+    assert!(!rows[1].resolved, "[[Missing Note]] resolves to no note");
+}
+
+#[test]
+fn g_on_non_vault_markdown_notices_and_does_not_open() {
+    // A plain (non-vault) dir: a markdown note with a link, but no `.obsidian/` ancestor.
+    let dir = TempDir::new();
+    std::fs::write(dir.path().join("Home.md"), "[[Target]]\n").unwrap();
+    std::fs::write(dir.path().join("Target.md"), "x\n").unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    let home = dir.path().join("Home.md");
+    select_and_settle(&mut ctrl, &home, "Home.md");
+
+    ctrl.handle(Intent::OpenLinkNav);
+    assert!(
+        !ctrl.link_nav_open(),
+        "no vault → the navigator does not open"
+    );
+    assert!(
+        ctrl.action_notice()
+            .unwrap_or("")
+            .contains("Obsidian vault"),
+        "a guidance notice is shown, got: {:?}",
+        ctrl.action_notice()
+    );
+}
+
+#[test]
+fn g_on_non_markdown_in_vault_notices_and_does_not_open() {
+    let dir = TempDir::new();
+    std::fs::create_dir(dir.path().join(".obsidian")).unwrap();
+    std::fs::write(dir.path().join("notes.txt"), "[[Target]]\n").unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    let txt = dir.path().join("notes.txt");
+    select_and_settle(&mut ctrl, &txt, "notes.txt");
+
+    ctrl.handle(Intent::OpenLinkNav);
+    assert!(
+        !ctrl.link_nav_open(),
+        "a non-markdown file never opens the navigator"
+    );
+    assert!(
+        ctrl.action_notice()
+            .unwrap_or("")
+            .contains("Obsidian vault"),
+        "a guidance notice is shown, got: {:?}",
+        ctrl.action_notice()
+    );
+}
+
+#[test]
+fn g_on_vault_note_with_no_links_notices_and_does_not_open() {
+    let dir = TempDir::new();
+    std::fs::create_dir(dir.path().join(".obsidian")).unwrap();
+    std::fs::write(
+        dir.path().join("Bare.md"),
+        "# Bare\n\njust prose, no links\n",
+    )
+    .unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    let bare = dir.path().join("Bare.md");
+    select_and_settle(&mut ctrl, &bare, "Bare.md");
+
+    ctrl.handle(Intent::OpenLinkNav);
+    assert!(
+        !ctrl.link_nav_open(),
+        "a linkless note does not open the navigator"
+    );
+    assert!(
+        ctrl.action_notice()
+            .unwrap_or("")
+            .contains("No wikilinks in this note"),
+        "the linkless notice is shown, got: {:?}",
+        ctrl.action_notice()
+    );
+}
+
+#[test]
+fn following_a_resolved_link_navigates_and_back_forward_walk_history() {
+    let (dir, mut ctrl) = link_nav_vault();
+    let home = dir.path().join("Home.md");
+    let target = dir.path().join("Target.md");
+
+    // Follow the resolved [[Target]] link (row 0, cursor starts there).
+    ctrl.handle(Intent::OpenLinkNav);
+    let fx = ctrl.handle_link_nav_key(key(KeyCode::Enter));
+    assert!(fx.redraw);
+    assert!(
+        !ctrl.link_nav_open(),
+        "following a link closes the navigator"
+    );
+    assert_eq!(
+        selected_path(&ctrl).as_deref(),
+        Some(target.as_path()),
+        "the displayed file moved to the link target"
+    );
+    await_content_title(&mut ctrl, "Target.md");
+
+    // `[` goes back to Home.md.
+    ctrl.handle(Intent::NavBack);
+    assert_eq!(
+        selected_path(&ctrl).as_deref(),
+        Some(home.as_path()),
+        "`[` returns to the previous note"
+    );
+    await_content_title(&mut ctrl, "Home.md");
+
+    // `]` goes forward to Target.md again.
+    ctrl.handle(Intent::NavForward);
+    assert_eq!(
+        selected_path(&ctrl).as_deref(),
+        Some(target.as_path()),
+        "`]` goes forward again"
+    );
+}
+
+#[test]
+fn nav_back_and_forward_on_empty_history_notice_and_do_not_move() {
+    let (dir, mut ctrl) = link_nav_vault();
+    let home = dir.path().join("Home.md");
+
+    let fx = ctrl.handle(Intent::NavBack);
+    assert!(fx.redraw);
+    assert_eq!(
+        selected_path(&ctrl).as_deref(),
+        Some(home.as_path()),
+        "an empty back-stack does not move the selection"
+    );
+    assert!(
+        ctrl.action_notice()
+            .unwrap_or("")
+            .contains("No previous note"),
+        "empty back-stack notice, got: {:?}",
+        ctrl.action_notice()
+    );
+
+    ctrl.handle(Intent::NavForward);
+    assert_eq!(
+        selected_path(&ctrl).as_deref(),
+        Some(home.as_path()),
+        "an empty forward-stack does not move the selection"
+    );
+    assert!(
+        ctrl.action_notice().unwrap_or("").contains("No next note"),
+        "empty forward-stack notice, got: {:?}",
+        ctrl.action_notice()
+    );
+}
+
+#[test]
+fn following_an_unresolved_link_notices_and_does_not_navigate() {
+    let (dir, mut ctrl) = link_nav_vault();
+    let home = dir.path().join("Home.md");
+
+    ctrl.handle(Intent::OpenLinkNav);
+    // Move the cursor to row 1 — the unresolved [[Missing Note]].
+    ctrl.handle_link_nav_key(key(KeyCode::Char('j')));
+    ctrl.handle_link_nav_key(key(KeyCode::Enter));
+
+    assert!(
+        !ctrl.link_nav_open(),
+        "the navigator closes on an unresolved follow"
+    );
+    assert_eq!(
+        selected_path(&ctrl).as_deref(),
+        Some(home.as_path()),
+        "an unresolved link does not move the selection"
+    );
+    assert!(
+        ctrl.action_notice()
+            .unwrap_or("")
+            .contains("Unresolved link: Missing Note"),
+        "the unresolved notice names the link, got: {:?}",
+        ctrl.action_notice()
+    );
+}
+
+#[test]
+fn following_a_link_with_a_heading_anchor_queues_a_scroll_to_that_line() {
+    // A note whose link carries a `#heading` anchor: following it queues a go-to-line jump to the
+    // heading's source line (best-effort), via the same mechanism go-to-line's auto-switch uses.
+    let dir = TempDir::new();
+    std::fs::create_dir(dir.path().join(".obsidian")).unwrap();
+    std::fs::write(dir.path().join("Home.md"), "[[Target#Middle]]\n").unwrap();
+    // "Middle" is a level-2 heading on source line 5 of Target.md.
+    std::fs::write(
+        dir.path().join("Target.md"),
+        "# Target\n\nintro\n\n## Middle\n\nbody\n",
+    )
+    .unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    ctrl.set_content_viewport(60, 20);
+    let home = dir.path().join("Home.md");
+    select_and_settle(&mut ctrl, &home, "Home.md");
+
+    ctrl.handle(Intent::OpenLinkNav);
+    ctrl.handle_link_nav_key(key(KeyCode::Enter));
+
+    assert_eq!(
+        selected_path(&ctrl).as_deref(),
+        Some(dir.path().join("Target.md").as_path()),
+        "the link navigated to Target.md"
+    );
+    assert_eq!(
+        ctrl.pending_goto_line(),
+        Some(5),
+        "the `#Middle` anchor queues a jump to the heading's source line (5)"
+    );
+}

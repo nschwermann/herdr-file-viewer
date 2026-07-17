@@ -26,6 +26,9 @@ impl Controller {
             | Modal::Prompt(_)
             | Modal::Annotations(_)
             | Modal::AnnotationEditor(_)
+            // The wikilink navigator is keyboard-only (like the prompt): swallow the mouse so a
+            // click/wheel never reaches the tree/content beneath and moves the selection under it.
+            | Modal::LinkNav(_)
             | Modal::DiscardConfirm(_) => Effects::noop(),
             Modal::LineSelect(_) => self.handle_line_select_mouse(ev),
             Modal::Help(_) => self.handle_help_mouse(ev),

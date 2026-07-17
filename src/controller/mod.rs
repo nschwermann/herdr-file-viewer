@@ -27,6 +27,7 @@ mod git_apply;
 mod help;
 mod infile;
 mod lineselect;
+mod linknav;
 mod mouse;
 mod picker;
 
@@ -37,12 +38,13 @@ use crate::help::{HelpSection, HelpSectionState, HelpState};
 use crate::herdr::HerdrCli;
 use crate::infile::{PromptMode, PromptState, SearchState};
 use crate::intent::Intent;
+use crate::linknav::{LinkItem, LinkNavState};
 use crate::picker::PickerState;
 use crate::presenter::{
     AnnotationEditorKind, AnnotationEditorView, AnnotationIndicatorsView, AnnotationOverviewView,
     AnnotationRowView, AnnotationTargetView, CharSelView, ContentSearch, DiscardConfirmView,
-    FinderView, Focus, HelpView, LineSelectView, PaneGeometry, PickerRowView, PickerView,
-    ViewState,
+    FinderView, Focus, HelpView, LineSelectView, LinkNavRowView, LinkNavView, PaneGeometry,
+    PickerRowView, PickerView, ViewState,
 };
 use crate::render::{Prepared, Renderers};
 use crate::root::Resolved;
@@ -308,6 +310,9 @@ enum Modal {
     LineSelect(LineSelectState),
     Annotations(AnnotationListState),
     AnnotationEditor(AnnotationEditorState),
+    /// The wikilink navigator (the `g` key): a centered list of the current markdown-in-vault
+    /// note's links. Keyboard-only, like the prompt; a re-root resets it to `Modal::None`.
+    LinkNav(LinkNavState),
     /// The confirm raised when an action would discard unexported annotations. Carries what to do
     /// once the user decides; the store it guards is the controller's.
     DiscardConfirm(DiscardAction),
@@ -429,6 +434,18 @@ impl Modal {
     fn annotation_editor_mut(&mut self) -> Option<&mut AnnotationEditorState> {
         match self {
             Modal::AnnotationEditor(s) => Some(s),
+            _ => None,
+        }
+    }
+    fn link_nav(&self) -> Option<&LinkNavState> {
+        match self {
+            Modal::LinkNav(s) => Some(s),
+            _ => None,
+        }
+    }
+    fn link_nav_mut(&mut self) -> Option<&mut LinkNavState> {
+        match self {
+            Modal::LinkNav(s) => Some(s),
             _ => None,
         }
     }
@@ -678,6 +695,14 @@ pub struct Controller {
     /// manager). Injected post-construction via [`set_opener`](Self::set_opener) (like
     /// [`herdr`](Self::herdr)) so the controller stays hermetic in tests. `None` until then.
     opener: Option<Box<dyn crate::opener::Opener>>,
+    /// The link-navigation back-stack: notes visited before the current one, most-recent last.
+    /// Following a wikilink pushes the note being left; `[` pops one and re-reveals it. Session
+    /// state (in-memory only), cleared on a re-root (its paths belong to the old root).
+    nav_back: Vec<PathBuf>,
+    /// The link-navigation forward-stack, the mirror of [`nav_back`](Self::nav_back): `[` pushes the
+    /// note it leaves onto this, and `]` pops one. Cleared whenever a fresh link is followed (a new
+    /// branch abandons the old forward history) and on a re-root.
+    nav_forward: Vec<PathBuf>,
     /// The effective key -> intent bindings the run loop decodes against (Slice B, T-6): the
     /// keybinding registry resolved with the config's `[keys]` overrides (config > default).
     /// Initialized to [`default_bindings`](crate::input::default_bindings) so a controller always
@@ -801,6 +826,8 @@ impl Controller {
             base_branch,
             current_branch,
             opener: None,
+            nav_back: Vec::new(),
+            nav_forward: Vec::new(),
             // Valid default bindings so the run loop can decode before (and if) `app::run` wires the
             // config's `[keys]` overrides via `set_keybindings`; tests inherit these unchanged.
             bindings: crate::input::default_bindings(),
@@ -962,6 +989,10 @@ impl Controller {
         self.content_hscroll = 0;
         self.tree_hscroll = 0;
         self.overrides.clear();
+        // The link-navigation history's paths belong to the old root — drop both stacks so `[`/`]`
+        // never re-reveal a note outside the freshly re-rooted tree.
+        self.nav_back.clear();
+        self.nav_forward.clear();
         // The old root's rendered content is invalid under the new root — drop the displayed-file
         // path so the title falls back to a neutral label until the new selection's render lands
         //. `dispatch_render` below sets `content_rendering` and the loading placeholder.
@@ -1475,6 +1506,7 @@ impl Controller {
                     }
                 }),
             help: self.help_view(),
+            link_nav: self.link_nav_view(),
         }
     }
 
@@ -1593,6 +1625,12 @@ impl Controller {
         {
             return Effects::noop();
         }
+        // The wikilink navigator is modal too: the run loop routes raw keys to
+        // `handle_link_nav_key` while it is open, so `handle` should not be reached. Guard
+        // structurally — symmetric with the finder guard.
+        if self.modal.link_nav().is_some() {
+            return Effects::noop();
+        }
         match intent {
             Intent::NavUp => self.navigate(-1),
             Intent::NavDown => self.navigate(1),
@@ -1648,6 +1686,9 @@ impl Controller {
                     }
                 }
             },
+            Intent::OpenLinkNav => self.open_link_nav(),
+            Intent::NavBack => self.nav_back(),
+            Intent::NavForward => self.nav_forward(),
             Intent::ShowHelp => self.open_help(),
             Intent::Close => self.close_or_unzoom(),
         }

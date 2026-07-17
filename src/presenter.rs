@@ -153,6 +153,9 @@ pub struct ViewState {
     /// When `Some`, the in-app help overlay is drawn on top of everything else (AC-1, AC-5).
     /// `None` ⇒ no overlay. Drawn last in [`draw`] so it sits above the picker and finder.
     pub help: Option<HelpView>,
+    /// When `Some`, the wikilink navigator overlay is drawn on top of the columns (the `g` key).
+    /// `None` ⇒ no overlay. A centered list of the current note's links, mirroring the finder.
+    pub link_nav: Option<LinkNavView>,
 }
 
 /// The worktree picker's draw model (an owned snapshot of the controller's picker state, so
@@ -246,6 +249,25 @@ pub struct FinderView {
     /// `max_row_width − inner_width` at draw so it can never over-scroll. The query line is
     /// NOT scrolled; this affects only the match rows.
     pub hscroll: u16,
+}
+
+/// The wikilink-navigator overlay's draw model (an owned snapshot of the controller's
+/// [`crate::linknav::LinkNavState`], so the Presenter stays borrow-free). Built by the Session
+/// Controller's `view_state()`. Mirrors [`FinderView`], but simpler — a static list, no query.
+pub struct LinkNavView {
+    /// The link rows, in source order.
+    pub rows: Vec<LinkNavRowView>,
+    /// Index into `rows` of the highlighted row.
+    pub cursor: usize,
+}
+
+/// One link row in the navigator overlay.
+pub struct LinkNavRowView {
+    /// The link's display text (alias, else target + anchor). Sanitized at draw for AC-27.
+    pub display: String,
+    /// Whether the link resolves to a note in the vault. An unresolved row draws an
+    /// `(unresolved)` marker and is never followed.
+    pub resolved: bool,
 }
 
 /// Owned, typed persistent-indicator projection for the pure Presenter.
@@ -1449,6 +1471,10 @@ pub fn draw(frame: &mut Frame, state: &ViewState) -> (u16, u16) {
     if let Some(finder) = &state.finder {
         draw_finder_overlay(frame, frame.area(), finder);
     }
+    // The wikilink navigator is also a modal overlay (keyboard-only). Only one modal is ever open.
+    if let Some(nav) = &state.link_nav {
+        draw_link_nav_overlay(frame, frame.area(), nav);
+    }
     // Annotation modals are keyboard-only overlays. They add no hit-test geometry; their owned,
     // typed draw models contain raw fields and the Presenter formats/sanitizes them here.
     if let Some(overview) = &state.annotation_overview {
@@ -1783,6 +1809,14 @@ const FINDER_PROMPT: &str = "> ";
 /// The placeholder shown on the query-input line when the query is empty (AC-2).
 const FINDER_PLACEHOLDER: &str = "> type to find a file…";
 
+/// The wikilink-navigator overlay's top-left title (the box label).
+const LINK_NAV_TITLE: &str = "Follow link";
+/// The wikilink-navigator overlay's key-hint footer on the bottom border — its real bindings,
+/// with herdr's ` · ` separator. Static (not repo-derived), so no sanitization is needed.
+const LINK_NAV_FOOTER_HINT: &str = "↑↓/j/k move · ⏎ follow · esc close";
+/// The trailing marker appended to a link row that resolves to no note in the vault.
+const LINK_NAV_UNRESOLVED: &str = "  (unresolved)";
+
 /// The help overlay's top-left title (the box label).
 const HELP_TITLE: &str = "Help";
 /// The persistent discoverability hint shown on the content pane's bottom border — a
@@ -2061,6 +2095,94 @@ fn draw_finder_overlay(frame: &mut Frame, area: Rect, finder: &FinderView) {
                 &mut sb_state.clone(),
             );
         }
+    }
+}
+
+/// Draw the wikilink navigator as a centered, bordered overlay on top of the columns (the `g`
+/// key). A keyboard-only modal, so — unlike the finder — it feeds back no hit-test geometry: the
+/// sizing/centering/scroll math lives here alone. Each row shows the link's display text, run
+/// through `sanitize_control` (AC-27), with a dim `(unresolved)` marker on a link that resolves to
+/// no note. The `cursor` row is highlighted REVERSED, the same idiom the finder/picker use.
+fn draw_link_nav_overlay(frame: &mut Frame, area: Rect, nav: &LinkNavView) {
+    // Build every row once, size-to-content (like the finder). An unresolved row appends a dim
+    // marker as a second span so the label stays legible.
+    let rows: Vec<Line<'static>> = nav
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let base = if i == nav.cursor {
+                Style::new().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::new()
+            };
+            let mut spans = vec![Span::styled(sanitize_control(&row.display), base)];
+            if !row.resolved {
+                spans.push(Span::styled(
+                    LINK_NAV_UNRESOLVED,
+                    base.add_modifier(Modifier::DIM),
+                ));
+            }
+            Line::from(spans)
+        })
+        .collect();
+
+    let hint_style = Style::new().fg(Color::Reset);
+    let top_left = Line::from(LINK_NAV_TITLE);
+    let footer = Line::styled(LINK_NAV_FOOTER_HINT, hint_style).centered();
+
+    // Size the box to the widest row / the chrome, clamped to the frame (mirrors the finder).
+    let max_row_w = rows.iter().map(Line::width).max().unwrap_or(0);
+    let desired_inner_w = max_row_w
+        .max(top_left.width())
+        .max(footer.width())
+        .min(u16::MAX as usize) as u16;
+    let desired_inner_h = (rows.len().min(u16::MAX as usize) as u16).max(1);
+    let want_w = desired_inner_w
+        .saturating_add(2)
+        .saturating_add(PICKER_PADDING * 2);
+    let want_h = desired_inner_h
+        .saturating_add(2)
+        .saturating_add(PICKER_PADDING * 2);
+    let cap_w = area.width.saturating_sub(2);
+    let cap_h = area.height.saturating_sub(2);
+    let popup = centered_rect_sized(want_w.min(cap_w), want_h.min(cap_h), area);
+
+    frame.render_widget(Clear, popup);
+    let block = modal_frame()
+        .title_top(top_left)
+        .title_bottom(footer)
+        .border_style(modal_border_style());
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    if inner.height == 0 || rows.is_empty() {
+        return;
+    }
+    let visible = inner.height as usize;
+    let offset = scroll_offset(nav.cursor, rows.len(), visible);
+    let window: Vec<Line<'static>> = rows.into_iter().skip(offset).take(visible).collect();
+    frame.render_widget(Paragraph::new(window), inner);
+
+    // Vertical scrollbar when the rows overflow the visible height. It tracks the cursor (not the
+    // viewport offset) so the thumb follows the selection, like the finder/tree bars.
+    if nav.rows.len() > visible {
+        let sb_area = Rect {
+            x: inner.x + inner.width.saturating_sub(1),
+            y: inner.y,
+            width: 1,
+            height: inner.height,
+        };
+        let sb_state = scrollbar_state(nav.rows.len(), nav.cursor, visible);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .thumb_symbol("▐")
+                .track_symbol(None)
+                .begin_symbol(None)
+                .end_symbol(None),
+            sb_area,
+            &mut sb_state.clone(),
+        );
     }
 }
 

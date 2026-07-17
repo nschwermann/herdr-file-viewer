@@ -91,6 +91,23 @@ viewer still opens, but the status markers, filter, baseline, and diffs are degr
   lowercase query matches any case; add a capital to go case-sensitive — and it works in every view
   (code, markdown, or diff). `Esc` clears it and restores your scroll.
 
+## Following wikilinks (Obsidian vaults)
+
+When the file you are viewing is a markdown note inside an **Obsidian vault** (an ancestor directory
+holds a `.obsidian/` folder), you can follow its links to other notes without leaving the viewer.
+
+- Press `g` to open the **link navigator**: a centered list of the note's `[[wikilinks]]`,
+  `![[embeds]]`, and relative `[text](note.md)` links, in the order they appear. Move with `↑` / `↓`
+  or `j` / `k`, press `Enter` to follow the selected link, and `Esc` / `q` to close.
+- Targets resolve **vault-wide**, the Obsidian way — a bare `[[Note]]` finds the closest/shallowest
+  `Note.md` anywhere in the vault (preferring the same folder). A link that matches no note is shown
+  as **(unresolved)** and is never followed.
+- A link with a `#heading` or `#^block` anchor scrolls the opened note to that spot (best-effort).
+- `[` and `]` walk a **back / forward history** of the notes you visit this way, like a browser.
+
+(Rendered markdown shows `[[…]]` as literal text — `glow` doesn't know Obsidian syntax — so use `g`
+rather than clicking to follow a link.)
+
 ## Annotating files and ranges
 
 Annotations are read-only notes for the **current viewer session and root**. They start empty on
