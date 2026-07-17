@@ -108,6 +108,17 @@ holds a `.obsidian/` folder), you can follow its links to other notes without le
 (Rendered markdown shows `[[…]]` as literal text — `glow` doesn't know Obsidian syntax — so use `g`
 rather than clicking to follow a link.)
 
+## Obsidian markdown rendering
+
+The rendered markdown view (`v`) understands some Obsidian-flavored markdown that `glow` alone does
+not, by rewriting the note before it is rendered. These apply to any markdown note; the source view
+(cycle to it with `v`) always shows the file untouched.
+
+- **Callouts.** A `> [!note]`, `> [!warning]`, `> [!tip]`, `> [!important]` … block renders as a
+  titled, bordered box rather than a literal `[!note]` blockquote. A custom title after the type is
+  kept (`> [!warning] Heads up`), and a foldable marker (`> [!note]-` / `+`) shows a `▸` / `▾`
+  indicator. Unknown types fall back to a generic titled box.
+
 ## Annotating files and ranges
 
 Annotations are read-only notes for the **current viewer session and root**. They start empty on

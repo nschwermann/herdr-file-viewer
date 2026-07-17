@@ -465,7 +465,28 @@ struct LiveContent {
     media_cap: crate::media::MediaCapability,
 }
 
+/// Apply a text transform to a [`Prepared`]'s content, preserving the variant (a `Binary`
+/// placeholder and any truncation notice pass through unchanged). Used to rewrite markdown source
+/// before it is handed to glow.
+fn map_prepared_text(prepared: Prepared, f: impl Fn(&str) -> String) -> Prepared {
+    match prepared {
+        Prepared::Full { text } => Prepared::Full { text: f(&text) },
+        Prepared::Truncated { text, notice } => Prepared::Truncated {
+            text: f(&text),
+            notice,
+        },
+        Prepared::Binary => Prepared::Binary,
+    }
+}
+
 impl LiveContent {
+    /// The Obsidian markdown transforms applied to a note's source before glow renders it (the
+    /// rendered-markdown view only). Rewrites callouts (`> [!note]`) into titled blockquotes.
+    /// Pure over the prepared text; a binary/placeholder passes through.
+    fn transform_markdown(&self, prepared: Prepared) -> Prepared {
+        map_prepared_text(prepared, crate::mdnote::transform_callouts)
+    }
+
     /// Build the content-pane result for an image/video file: a plain-text placeholder naming the
     /// type, its dimensions (cheaply parsed for images), its size, and whether an inline preview is
     /// available. Read-only (a bounded header read for dimensions + a metadata size stat); never
@@ -529,6 +550,15 @@ impl ContentProvider for LiveContent {
                 Some(text.lines().map(str::to_owned).collect())
             }
             _ => None,
+        };
+        // Obsidian markdown transforms: rewrite the source before glow renders it, but ONLY for the
+        // rendered-markdown view — the source view (`v` → SyntaxContent) shows the raw file
+        // untouched, and diffs render from git text. `source` above is already `None` here, so the
+        // transform never disturbs the source map.
+        let prepared = if mode == ViewMode::RenderedMarkdown {
+            self.transform_markdown(prepared)
+        } else {
+            prepared
         };
         // For rendered markdown at a known pane width, point glow's `-w` at that width so it lays
         // out and wraps tables to fit the pane (columns sized, cells ellipsized, borders intact),
@@ -1546,6 +1576,47 @@ mod tests {
             .flat_map(|l| l.spans.iter())
             .map(|s| s.content.as_ref())
             .collect()
+    }
+
+    /// A `LiveContent` whose renderers are all `cat`, so the rendered-markdown output is exactly
+    /// the (transformed) source piped through — letting a test assert what the Obsidian markdown
+    /// transforms produced before glow would run.
+    #[cfg(unix)]
+    fn cat_md_content(root: &Path) -> LiveContent {
+        LiveContent {
+            root: root.to_path_buf(),
+            renderers: Renderers {
+                markdown: vec!["cat".into()],
+                diff: vec!["cat".into()],
+                full_diff: vec!["cat".into()],
+                syntax: vec!["cat".into()],
+                timeout: Duration::from_secs(5),
+            },
+            caps: Caps::default(),
+            media_preview: false,
+            media_cap: crate::media::MediaCapability::default(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rendered_markdown_transforms_callouts_into_titled_blockquotes() {
+        let root = tmp("md-callout");
+        let md = root.join("note.md");
+        std::fs::write(&md, "> [!warning] Heads up\n> the body\n\ntext\n").unwrap();
+        let content = cat_md_content(&root);
+        let out = content.render_at_width(&md, ViewMode::RenderedMarkdown, None, None);
+        let text = flatten_content(&out);
+        assert!(text.contains("WARNING"), "callout type labelled: {text}");
+        assert!(text.contains("Heads up"), "custom title kept: {text}");
+        assert!(text.contains("the body"), "callout body kept: {text}");
+        // The source view is NOT transformed — the raw `[!warning]` survives.
+        let raw = content.render_at_width(&md, ViewMode::SyntaxContent, None, None);
+        assert!(
+            flatten_content(&raw).contains("[!warning]"),
+            "the source view shows the untransformed note"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// The table fix: rendered markdown at a known pane width hands glow `-w <width>` so it lays
