@@ -141,6 +141,19 @@ pub struct ViewState {
     /// True while an off-thread render for a file is in flight. The Presenter uses this to pick a
     /// neutral title while the body shows the loading placeholder.
     pub content_rendering: bool,
+    /// The displayed content's view-type label for the content pane's bottom status bar (e.g.
+    /// `"Markdown"`, `"Source"`, `"Diff"`, `"Full Diff"`) — [`crate::view_policy::view_label`]
+    /// applied to the displayed file's effective mode. `None` while no file's content has landed
+    /// (launch, re-root, or a directory/empty selection), mirroring
+    /// [`content_title`](Self::content_title) so the chip switches in lockstep with the body — it is
+    /// deliberately NOT in the pane TITLE (that stays just the file name). Clicking its drawn rect
+    /// cycles the view (same as the `v` key).
+    pub content_view_label: Option<String>,
+    /// The number of followable links in the displayed markdown-in-vault note, for the status bar's
+    /// links chip. `0` when the displayed file is not a markdown note in an Obsidian vault or has no
+    /// links (the chip is then hidden). Cached by the controller (recomputed when a render lands),
+    /// never parsed per-frame. Clicking its drawn rect opens the link navigator (same as the `g` key).
+    pub content_link_count: usize,
     /// When `Some`, the content pane is drawn through [`crate::highlight::apply`] to overlay
     /// match highlights on top of the rendered text (AC-9, AC-11). `None` ⇒ draw the content
     /// as-is (byte-identical to today — the `None` arm is just `state.content.clone()`).
@@ -655,6 +668,147 @@ fn content_max_line_width(content: &Text<'static>) -> usize {
     content.lines.iter().map(|l| l.width()).max().unwrap_or(0)
 }
 
+/// The content pane's bottom status bar: the chips that ride the bottom border row (the `? help`
+/// hint, the interactive view-type + links chips, and the annotation count), each paired with the
+/// exact screen rect it is drawn at. Built once by [`content_status_bar`] and consumed by both
+/// [`draw_content`] (to draw the chips) and [`geometry`] (to feed the clickable rects back for
+/// hit-testing), so a drawn chip and its hit-test rect can never drift — the same pattern
+/// [`help_overlay_layout`] uses for the help tabs.
+#[derive(Default)]
+struct ContentStatusBar {
+    /// The interactive view-type chip (label + rect) — clicking it cycles the view. `None` when no
+    /// content has landed or it did not fit.
+    view: Option<(String, Rect)>,
+    /// The interactive links-counter chip (label + rect) — clicking it opens the link navigator.
+    /// `None` when the note has no followable links or it did not fit.
+    links: Option<(String, Rect)>,
+    /// The annotation-count chip (label + rect). `None` when zero or it did not fit.
+    annotation: Option<(String, Rect)>,
+    /// The persistent `? help` hint (label + rect). `None` only on a pane too narrow for even it.
+    help: Option<(String, Rect)>,
+}
+
+impl ContentStatusBar {
+    /// Every drawable chip as `(text, rect)`, in a stable order — the iteration [`draw_content`]
+    /// renders from.
+    fn chips(&self) -> impl Iterator<Item = (&str, Rect)> {
+        [
+            self.view.as_ref(),
+            self.links.as_ref(),
+            self.annotation.as_ref(),
+            self.help.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|(text, rect)| (text.as_str(), *rect))
+    }
+}
+
+/// Lay out the content pane's bottom status bar for the content column's OUTER rect `area` (border
+/// included). Chips are placed on the bottom border row, in priority order, each only if it still
+/// fits in the remaining inter-corner width — so a narrow pane sheds the least-important chip first:
+///
+/// 1. `? help` (right edge) — the persistent affordance, highest priority.
+/// 2. the view-type chip (left edge) — interactive: a click cycles the view.
+/// 3. the links counter (left, after the view chip) — interactive: a click opens the link navigator.
+/// 4. the annotation count (right, left of the help hint) — informational.
+///
+/// A one-column gap separates adjacent chips (and the left/right clusters), so nothing ever
+/// overlaps. Every chip string is run through [`sanitize_control`] before measuring, so the drawn
+/// width equals the measured width (AC-27 defense-in-depth, and layout parity). Shared by
+/// [`draw_content`] and [`geometry`].
+fn content_status_bar(area: Rect, state: &ViewState) -> ContentStatusBar {
+    let mut bar = ContentStatusBar::default();
+    // Need a border row and at least one interior column between the two corner glyphs.
+    if area.height == 0 || area.width < 3 {
+        return bar;
+    }
+    let y = area.y + area.height - 1;
+    let mut cur_left = area.x + 1; // first interior column after the left corner
+    let mut cur_right = (area.x + area.width).saturating_sub(2); // last before the right corner
+    const GAP: u16 = 1;
+    let avail = |l: u16, r: u16| if r >= l { r - l + 1 } else { 0 };
+    let chip_width = |s: &str| Line::from(s).width().min(u16::MAX as usize) as u16;
+
+    // 1. `? help` on the right (highest priority — the persistent affordance).
+    let help = sanitize_control(HELP_HINT);
+    let hw = chip_width(&help);
+    if hw > 0 && avail(cur_left, cur_right) >= hw {
+        let x = cur_right + 1 - hw;
+        bar.help = Some((
+            help,
+            Rect {
+                x,
+                y,
+                width: hw,
+                height: 1,
+            },
+        ));
+        cur_right = cur_right.saturating_sub(hw + GAP);
+    }
+
+    // 2. View-type chip on the left (interactive).
+    if let Some(label) = &state.content_view_label {
+        let label = sanitize_control(label);
+        let w = chip_width(&label);
+        if w > 0 && avail(cur_left, cur_right) >= w {
+            let x = cur_left;
+            bar.view = Some((
+                label,
+                Rect {
+                    x,
+                    y,
+                    width: w,
+                    height: 1,
+                },
+            ));
+            cur_left = cur_left.saturating_add(w + GAP);
+        }
+    }
+
+    // 3. Links counter on the left, right of the view chip (interactive).
+    if state.content_link_count > 0 {
+        let n = state.content_link_count;
+        let text = sanitize_control(&format!("{n} {}", if n == 1 { "link" } else { "links" }));
+        let w = chip_width(&text);
+        if w > 0 && avail(cur_left, cur_right) >= w {
+            let x = cur_left;
+            bar.links = Some((
+                text,
+                Rect {
+                    x,
+                    y,
+                    width: w,
+                    height: 1,
+                },
+            ));
+            cur_left = cur_left.saturating_add(w + GAP);
+        }
+    }
+
+    // 4. Annotation count on the right, left of the help hint (informational — sheds first). This
+    // is the last chip, so it only reads the current window; nothing consumes `cur_right`/`cur_left`
+    // after it.
+    if state.annotation_count > 0 {
+        let text = sanitize_control(&format!("annotations: {}", state.annotation_count));
+        let w = chip_width(&text);
+        if w > 0 && avail(cur_left, cur_right) >= w {
+            let x = cur_right + 1 - w;
+            bar.annotation = Some((
+                text,
+                Rect {
+                    x,
+                    y,
+                    width: w,
+                    height: 1,
+                },
+            ));
+        }
+    }
+
+    bar
+}
+
 /// The gutter glyph on the marker (cursor) line — a caret so the active line is visible even with
 /// color stripped (the row also carries [`crate::highlight::CURRENT_HIGHLIGHT`]).
 const LINE_SELECT_MARKER: char = '▶';
@@ -1060,27 +1214,27 @@ fn draw_content(frame: &mut Frame, area: Rect, state: &ViewState) -> (u16, u16) 
     if applied_title && state.annotation_indicators.displayed_file_annotated {
         title.insert(0, '@');
     }
-    // Persistent bottom-border chips: annotation count on the left (only when nonzero and it
-    // fits), help on the right. Both ride the border rather than consuming a content row. The
-    // annotation chip deliberately names no key because ShowAnnotations is configurable.
-    let hint_text = sanitize_control(HELP_HINT);
-    let hint = Line::styled(hint_text.clone(), Style::new().fg(Color::Reset)).right_aligned();
-    let annotation_chip = (state.annotation_count > 0)
-        .then(|| sanitize_control(&format!("annotations: {}", state.annotation_count)));
-    let chip_fits = annotation_chip.as_ref().is_some_and(|chip| {
-        Line::from(chip.as_str()).width() + 1 + Line::from(hint_text.as_str()).width()
-            <= area.width.saturating_sub(2) as usize
-    });
-    let mut block = content_block(state).title(title).title_bottom(hint);
-    if chip_fits {
-        block = block.title_bottom(Line::styled(
-            annotation_chip.expect("checked as present"),
-            Style::new().fg(Color::Reset),
-        ));
-    }
-    let block = block.border_style(border_style(state.focus == Focus::Content));
+    // The pane TITLE stays just the file name. The bottom border row carries the interactive status
+    // bar — the view-type + links chips (left, clickable), the annotation count and the persistent
+    // `? help` hint (right) — laid out by the shared `content_status_bar` so the drawn chip
+    // positions match the hit-test rects `geometry` feeds back. Build the block with NO bottom
+    // titles, render it, then overlay each chip onto the border row at its computed rect (over the
+    // border glyphs, exactly as a `title_bottom` would). The chips ride the border, never consuming
+    // a content row.
+    let block = content_block(state)
+        .title(title)
+        .border_style(border_style(state.focus == Focus::Content));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    for (text, rect) in content_status_bar(area, state).chips() {
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                text.to_string(),
+                Style::new().fg(Color::Reset),
+            )),
+            rect,
+        );
+    }
 
     // A notice strip (truncation AC-13, fallback AC-25) sits above the content, bounded so
     // it can never crowd out the file itself; the file + its scrollbars fill the area below it.
@@ -1353,6 +1507,16 @@ pub struct PaneGeometry {
     /// widths + `HELP_TAB_SEP`), so a click maps to the tab actually drawn. Empty when the overlay is
     /// closed. The controller hit-tests a left-click against these to switch sections (AC-10).
     pub help_tabs: Vec<(usize, Rect)>,
+    /// The screen rect of the content pane's bottom-border **view-type chip** (e.g. `Markdown`),
+    /// `None` when no content has landed or the chip did not fit. Computed by [`content_status_bar`]
+    /// from the SAME layout math [`draw_content`] draws it at, so a click maps to the chip actually
+    /// shown. The controller hit-tests a left-click against it to cycle the view (like `v`).
+    pub status_view_rect: Option<Rect>,
+    /// The screen rect of the content pane's bottom-border **links chip** (e.g. `3 links`), `None`
+    /// when the displayed note has no followable links or the chip did not fit. Same shared layout
+    /// as [`status_view_rect`](Self::status_view_rect); a left-click on it opens the link navigator
+    /// (like `g`).
+    pub status_links_rect: Option<Rect>,
 }
 
 /// Compute the [`PaneGeometry`] for hit-testing the current frame — the same layout [`draw`]
@@ -1406,6 +1570,21 @@ pub fn geometry(area: Rect, state: &ViewState) -> PaneGeometry {
             }
             None => (None, None, None),
         };
+
+    // Content pane bottom status bar: the SAME layout `draw_content` draws the chips at, so a click
+    // on the view-type / links chip maps to the chip actually shown. Only the two INTERACTIVE chips
+    // are fed back for hit-testing (the `? help` hint and the annotation count aren't clickable).
+    // `None` both when the content pane isn't drawn (narrow, tree-focused layout).
+    let (status_view_rect, status_links_rect) = match content {
+        Some(c) => {
+            let bar = content_status_bar(c, state);
+            (
+                bar.view.as_ref().map(|(_, r)| *r),
+                bar.links.as_ref().map(|(_, r)| *r),
+            )
+        }
+        None => (None, None),
+    };
 
     // Finder: if the finder overlay is open, compute its layout with the same helper
     // `draw_finder_overlay` uses (same `area` = `frame.area()` = the full terminal rect),
@@ -1465,6 +1644,8 @@ pub fn geometry(area: Rect, state: &ViewState) -> PaneGeometry {
         help_body_rows,
         help_vbar,
         help_tabs,
+        status_view_rect,
+        status_links_rect,
     }
 }
 

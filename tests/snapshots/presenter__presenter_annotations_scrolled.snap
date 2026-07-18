@@ -13,4 +13,4 @@ expression: out
 "│ │ src/file-21.rs:22 — note 21                                              │ │"
 "│ │                                                                          │ │"
 "│ └──↑↓/j/k move · Enter/e edit · d delete · D clear · y copy · Esc/q close──┘ │"
-"└──────────────────────────────┘└annotations: 24─────────────────────────? help┘"
+"└──────────────────────────────┘└Source──────────────────annotations: 24─? help┘"

@@ -192,3 +192,70 @@ filter modelled on the existing changed-only filter.
   (`src/controller/mouse.rs`), a tree-filter test (`tests/tree_filters.rs`), and an end-to-end
   click→filter→`Esc` test (`tests/controller.rs`). Full suite green except the one known-flaky e2e
   search test (fails on the base commit too).
+
+## C — unified interactive status bar
+
+**(a) What changed.** The content pane's bottom border is now a single **interactive status bar**.
+It consolidates, on the same row as the `? help` hint:
+
+- the **current view type** — `Markdown`, `Source` (the syntax/plain content view), `Diff`, or
+  `Full Diff` — shown on the LEFT. This lives ONLY on the bottom border; the pane **title still shows
+  just the file name** (unchanged).
+- a **links counter** (`3 links`, `1 link`) on the left after the view type, shown only when the
+  displayed file is a markdown note **in an Obsidian vault** and has followable links (the exact gate
+  the `g` navigator uses). Hidden otherwise.
+- the existing **annotation count** (now on the right, before `? help`) and the persistent `? help`
+  hint (far right), unchanged in meaning.
+
+Both new chips are **mouse-interactive** (keyboard behaviour is 100% unchanged):
+- **click the view-type chip → cycles the view** (identical to pressing `v`).
+- **click the links counter → opens the link list** (identical to pressing `g`).
+
+Layout degrades gracefully on a narrow pane: it drops the least-important chip first
+(annotations → links → view type → help), so nothing ever overlaps.
+
+**(b) Ghostty test steps (for Nathan).**
+1. This plugin is `herdr plugin link`ed to this working copy, so rebuild the release binary:
+   `cargo build --release` (from the repo root), then in herdr **close the viewer pane (`q`) and
+   reopen it** (e.g. `Ctrl+Space f`) so it picks up the new binary.
+2. Navigate to a **markdown note inside an Obsidian vault** that has some `[[wikilinks]]` (e.g. a note
+   in your Brain vault). Confirm the content pane's **bottom border shows `Markdown` on the left and
+   `N links`** next to it, with `? help` on the right.
+3. **Click the `Markdown` chip**: the view should cycle (`Markdown` → `Source` → … for a plain note;
+   a changed/tracked file also steps through `Diff` / `Full Diff`). The border label updates to match
+   each view. The pane title stays the file name throughout.
+4. **Click the `N links` chip**: the link navigator opens (same centered list as `g`); pick a link
+   and `Enter` to follow it, or `Esc` to close.
+5. **Confirm the keyboard still works**: press `v` (cycles the view) and `g` (opens the link list) —
+   both behave exactly as before. Open a **non-markdown** file (or a markdown note **not** in a vault)
+   and confirm the links counter is **absent** while the view-type chip still shows (e.g. `Source`).
+6. Shrink the pane narrow (drag the divider or resize the terminal) and confirm the chips shed
+   gracefully (annotations first) without ever colliding.
+
+**(c) Decisions / limitations.**
+- **No new key/intent.** The two clicks reuse the existing `CycleView` (`v`) and `OpenLinkNav` (`g`)
+  paths via the mouse, so there's no `[keys]` entry, no `?`-overlay row, and none of the keybinding
+  doc-consistency tests are triggered — exactly as the brief wanted.
+- **Lockstep by construction.** A single `content_status_bar(area, state)` helper in `presenter.rs`
+  computes every chip's rect; `draw_content` draws from it and `geometry()` feeds the two clickable
+  rects (`status_view_rect` / `status_links_rect`) back via `set_pane_geometry` — the same
+  fed-back-rect pattern the help tabs use, so the drawn positions and hit-test rects can't drift.
+  The chips are drawn directly onto the border row (not via ratatui `title_bottom`) precisely so the
+  rects are exact.
+- **Link-count caching.** The count is cached on the controller (`content_link_count`) and recomputed
+  only when a render **lands** (`poll`, where `content_path` is set), reset on a content clear /
+  re-root — never parsed per-frame. The note read is bounded (reuses `linknav::read_note_bounded`).
+- **Gate matches `g`.** The links chip appears exactly when `g` would open a non-empty navigator
+  (markdown + in a vault + has links), so clicking it never "does nothing".
+- **Border-row clicks.** These land on the pane border (outside `content_inner`), which used to be an
+  inert `Outside` click; `handle_click` now checks the two status rects first, so a normal content
+  click and text selection are unaffected.
+- **Snapshots.** Every content-pane presenter snapshot moved by exactly one row (the bottom border
+  now carries the view type, and the annotation chip moved from left to right); reviewed each diff to
+  confirm it is only the new bar, then accepted. Empty/loading fixtures set `content_view_label =
+  None` to mirror the real "no content landed" state (no chip).
+- **Tests:** `view_label` mapping (`src/view_policy.rs`); five status-bar layout/geometry tests
+  (rect computation, draw↔geometry lockstep, singular/plural, hidden-without-content, narrow
+  degradation) in `tests/presenter.rs`; link-count cache + click→cycle / click→link-nav routing in
+  `tests/controller.rs`. Full suite green except the one known-flaky e2e search test (fails on the
+  base commit too).

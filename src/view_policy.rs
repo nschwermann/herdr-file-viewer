@@ -29,6 +29,20 @@ pub struct FileDescriptor {
     pub is_changed: bool,
 }
 
+/// A short human label for a view mode, shown on the content pane's bottom status bar (the
+/// interactive view-type chip). Distinct from [`crate::render`]'s `capability` names (which word
+/// the renderer-fallback notices, e.g. "Full-file diff"/"Syntax"): these are the compact,
+/// user-facing view-type words — `Source` for the syntax/plain content view, `Full Diff` for the
+/// whole-file diff.
+pub fn view_label(mode: ViewMode) -> &'static str {
+    match mode {
+        ViewMode::RenderedMarkdown => "Markdown",
+        ViewMode::Diff => "Diff",
+        ViewMode::FullDiff => "Full Diff",
+        ViewMode::SyntaxContent => "Source",
+    }
+}
+
 /// The auto-selected default view mode for a file.
 pub fn default_mode(fd: &FileDescriptor) -> ViewMode {
     if fd.is_changed {
@@ -138,6 +152,16 @@ mod tests {
     fn applicable_modes_start_with_the_default_so_cycling_overrides_it() {
         let f = fd("README.md", true, false);
         assert_eq!(applicable_modes(&f).first(), Some(&default_mode(&f)));
+    }
+
+    #[test]
+    fn view_label_maps_each_mode_to_its_status_bar_word() {
+        // The status bar's view-type chip words — `Source` (not "Syntax") and `Full Diff` (not
+        // "Full-file diff"), distinct from render.rs's capability names.
+        assert_eq!(view_label(ViewMode::RenderedMarkdown), "Markdown");
+        assert_eq!(view_label(ViewMode::Diff), "Diff");
+        assert_eq!(view_label(ViewMode::FullDiff), "Full Diff");
+        assert_eq!(view_label(ViewMode::SyntaxContent), "Source");
     }
 
     #[test]

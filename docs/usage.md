@@ -45,7 +45,9 @@ The content pane shows **the right view for each file, automatically**: a change
 numbers. No mode-switching, no commands.
 
 - **Cycle the view** with `v` to override the automatic choice (e.g. see a changed markdown file's
-  raw source instead of its diff).
+  raw source instead of its diff). The content pane's **bottom border shows the current view type**
+  (`Markdown` / `Source` / `Diff` / `Full Diff`); **clicking it cycles the view** just like `v`
+  (the pane title itself stays just the file name).
 - A changed file can also show a **full-file diff**: the whole file with line numbers and the diff
   shown inline.
 - **Scroll** the content in all four directions once it's focused (`Tab` to it, then the arrows or
@@ -99,6 +101,8 @@ holds a `.obsidian/` folder), you can follow its links to other notes without le
 - Press `g` to open the **link navigator**: a centered list of the note's `[[wikilinks]]`,
   `![[embeds]]`, and relative `[text](note.md)` links, in the order they appear. Move with `↑` / `↓`
   or `j` / `k`, press `Enter` to follow the selected link, and `Esc` / `q` to close.
+- The content pane's **bottom border shows a links counter** (`3 links`) whenever the displayed note
+  has followable links; **clicking it opens the same link navigator** as `g`.
 - Targets resolve **vault-wide**, the Obsidian way — a bare `[[Note]]` finds the closest/shallowest
   `Note.md` anywhere in the vault (preferring the same folder). A link that matches no note is shown
   as **(unresolved)** and is never followed.

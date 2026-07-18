@@ -590,6 +590,13 @@ pub struct Controller {
     /// to pick a neutral title while the body shows the loading placeholder, so the title never
     /// jumps to a freshly-selected file before its content arrives.
     content_rendering: bool,
+    /// Cached count of followable links in the displayed markdown-in-vault note, for the content
+    /// pane's bottom status-bar links chip. Recomputed by [`recompute_link_count`](Self::recompute_link_count)
+    /// when a render lands ([`poll`](Self::poll) sets `content_path`), and reset to `0` whenever the
+    /// displayed content is cleared ([`clear_content`](Self::clear_content) / a re-root). `0` for any
+    /// file that is not a markdown note inside an Obsidian vault, or a note with no links — so parsing
+    /// never runs per-frame, only on a content change.
+    content_link_count: usize,
     /// A transient notice from the last action (e.g. an editor-launch failure); shown until
     /// the next intent is handled.
     action_notice: Option<String>,
@@ -837,6 +844,7 @@ impl Controller {
             content_embeds: Vec::new(),
             content_path: None,
             content_rendering: false,
+            content_link_count: 0,
             action_notice: None,
             annotations: AnnotationStore::new(),
             git,
@@ -1051,6 +1059,7 @@ impl Controller {
         // path so the title falls back to a neutral label until the new selection's render lands
         //. `dispatch_render` below sets `content_rendering` and the loading placeholder.
         self.content_path = None;
+        self.content_link_count = 0; // the old root's note is gone; recomputed when the next render lands
         let cleared_annotations = self.annotations.clear();
         self.action_notice = (cleared_annotations > 0).then(|| {
             format!(
@@ -1556,6 +1565,21 @@ impl Controller {
                 .and_then(|p| p.file_name())
                 .map(|s| s.to_string_lossy().into_owned()),
             content_rendering: self.content_rendering,
+            // The bottom status bar's view-type label: the displayed file's effective view mode,
+            // mapped to a short word. Gated on `content_path` (the displayed content) exactly like
+            // `content_title`, so the chip switches in lockstep with the body and is `None` while no
+            // file's content has landed. It is deliberately NOT put in the pane title.
+            content_view_label: self
+                .content_path
+                .as_deref()
+                .map(|p| crate::view_policy::view_label(self.effective_mode(p)).to_string()),
+            // The links chip's count. Gated on `content_path` too, so a re-root/clear (path `None`)
+            // shows no chip even if a stale count lingers before the next recompute.
+            content_link_count: if self.content_path.is_some() {
+                self.content_link_count
+            } else {
+                0
+            },
             // Populate the highlight overlay from the committed/live search state so the Presenter
             // overlays matches via highlight::apply. `None` when no search is active → draw_content
             // falls through to `state.content.clone()`, byte-identical to the prior path.
@@ -2880,6 +2904,7 @@ impl Controller {
         //.
         self.content_path = None;
         self.content_rendering = false;
+        self.content_link_count = 0; // no displayed note ⇒ no links chip
     }
 
     /// Drain finished renders from the worker, applying only the one matching the latest
@@ -2920,6 +2945,10 @@ impl Controller {
                 // the user has already moved past. The render is no longer in flight.
                 self.content_path = self.tree.selected().map(|n| n.path.clone());
                 self.content_rendering = false;
+                // The displayed note changed — refresh the cached link count for the status bar's
+                // links chip (0 for anything but a markdown-in-vault note with links). Bounded read,
+                // only here on a render landing — never per-frame.
+                self.recompute_link_count();
                 applied = true;
                 // A queued go-to-line jump (auto-switch from a transformed view, AC-7) applies once
                 // ITS render lands: now that the source-mapped content is in, scroll to the line.
@@ -3001,6 +3030,23 @@ impl Controller {
             }
         }
         applied.then(Effects::redraw)
+    }
+
+    /// (Re)compute the cached followable-link count for the currently displayed note (the status
+    /// bar's links chip). Only a markdown note inside an Obsidian vault has a count — the same gate
+    /// the `g` navigator ([`open_link_nav`](Self::open_link_nav)) applies, so clicking the chip does
+    /// exactly what `g` does. Everything else (non-markdown, not in a vault, unreadable) is `0`. The
+    /// note read is bounded (reuses `linknav::read_note_bounded`) and only runs on a content change
+    /// (a render landing), never per-frame. Read-only.
+    fn recompute_link_count(&mut self) {
+        self.content_link_count = self
+            .content_path
+            .clone()
+            .filter(|p| crate::obsidian::is_markdown(p))
+            .filter(|p| crate::obsidian::find_vault(p).is_some())
+            .and_then(|p| linknav::read_note_bounded(&p))
+            .map(|source| crate::wikilink::parse_links(&source).len())
+            .unwrap_or(0);
     }
 
     /// The effective view mode for a file: the user's override, else the policy default.

@@ -11,4 +11,4 @@ expression: out
 "││ src/file-10.rs:11 — narrow … ││"
 "││                              ││"
 "│└sc/q close────────────────────┘│"
-"└annotations: 12───────────? help┘"
+"└Source────annotations: 12─? help┘"

@@ -120,6 +120,8 @@ The viewer is keyboard-first; the mouse is additive and on by default:
 | **Click** a tree row | Select it (focus the tree) |
 | **Click** a link in a note | **Follow it**: clicking a `[[wikilink]]`, `![[embed]]`, or `[text](note)` in a rendered/source markdown-in-vault view opens that note in-viewer (same as `g` → select), keeping the `[` / `]` back/forward history. A click on plain text just focuses the pane |
 | **Click** a `#tag` in a note | **Filter the tree by that tag**: clicking a tag chip in the frontmatter **Properties** panel, or an inline `#tag` in the body, restricts the file tree to every vault note carrying that tag (Obsidian's `tag:` search; a parent tag also matches its nested children). The tree's title shows `▽ #tag`; press `Esc` (see [below](#clearing-a-tag-filter)) to restore the full tree. Only notes under the tree root are shown |
+| **Click** the view-type chip (content pane bottom border) | **Cycle the content view** (same as `v`): steps through the applicable modes — `Markdown` → `Source` → `Diff` → `Full Diff` as they apply to the file |
+| **Click** the links counter (content pane bottom border) | **Open the note's link list** (same as `g`): shown only for a markdown note in an Obsidian vault that has followable links |
 | **Double-click** a folder | Expand / collapse it (same as `Enter`) |
 | **Double-click** a file | Open it in **zoom mode**: content full-screen (same as `Enter`); the editor is the `e` key |
 | **Wheel** over the content pane | Scroll it vertically; over the tree, move the selection |

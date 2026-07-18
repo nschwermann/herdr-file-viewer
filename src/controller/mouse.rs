@@ -245,6 +245,20 @@ impl Controller {
     /// double-click [`activate`](Self::activate)s the row — a directory toggles expand/collapse,
     /// a file opens in zoom mode (the editor hand-off is the `e` key, not the mouse).
     fn handle_click(&mut self, col: u16, row: u16) -> Effects {
+        // The content pane's bottom-border status bar rides OUTSIDE `content_inner` (it's on the
+        // border row), so these clicks would otherwise fall through to the inert `Outside` arm.
+        // Check the two interactive chips first — same effect as the `v` / `g` keys, keyboard
+        // behavior unchanged. `last_click` is cleared so a chip click never pairs into a
+        // double-click on a later tree-row click.
+        let pos = Position { x: col, y: row };
+        if self.geom.status_view_rect.is_some_and(|r| r.contains(pos)) {
+            self.last_click = None;
+            return self.cycle_view(); // like pressing `v`
+        }
+        if self.geom.status_links_rect.is_some_and(|r| r.contains(pos)) {
+            self.last_click = None;
+            return self.open_link_nav(); // like pressing `g`
+        }
         let region = self.hit_test(col, row);
         let now = Instant::now();
         match region {

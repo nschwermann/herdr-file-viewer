@@ -99,6 +99,8 @@ fn sample_state() -> ViewState {
         prompt: None,
         content_title: Some("main.rs".to_string()),
         content_rendering: false,
+        content_view_label: Some("Source".to_string()),
+        content_link_count: 0,
         search: None,
         line_select: None,
         content_selection: None,
@@ -189,6 +191,135 @@ fn tree_branch_uses_middle_ellipsis_when_long() {
     assert!(
         !out.contains(&"z".repeat(40)),
         "the middle is dropped (the full run is not rendered)\n{out}"
+    );
+}
+
+// ── Content-pane bottom status bar (interactive view-type + links chips) ──────────────
+
+use herdr_file_viewer::presenter::geometry;
+use ratatui::layout::Rect;
+
+/// The chars of one rendered row (box-drawing glyphs are multibyte, so index by char, not byte).
+/// `TestBackend`'s Display wraps each row in surrounding double-quotes, so strip those first — the
+/// content is quote-free at the row ends, so this restores true column indices.
+fn row_chars(out: &str, y: u16) -> Vec<char> {
+    let line = out.lines().nth(y as usize).unwrap();
+    let line = line.strip_prefix('"').unwrap_or(line);
+    let line = line.strip_suffix('"').unwrap_or(line);
+    line.chars().collect()
+}
+
+/// The substring drawn at a rect's row over `[x, x + width)`.
+fn text_at(out: &str, rect: Rect) -> String {
+    let chars = row_chars(out, rect.y);
+    chars[rect.x as usize..(rect.x + rect.width) as usize]
+        .iter()
+        .collect()
+}
+
+#[test]
+fn status_bar_view_and_links_rects_match_what_is_drawn() {
+    // A landed markdown-in-vault note: the bottom status bar shows the interactive view-type chip
+    // (left) and the links counter (right of it), and `geometry` feeds back the EXACT rects they
+    // are drawn at — the lockstep the hit-test relies on.
+    let mut state = sample_state();
+    state.content_view_label = Some("Markdown".to_string());
+    state.content_link_count = 3;
+    let area = Rect::new(0, 0, 100, 24);
+    let geom = geometry(area, &state);
+    let view = geom.status_view_rect.expect("view-type chip rect present");
+    let links = geom.status_links_rect.expect("links chip rect present");
+
+    // Both ride the content pane's bottom border row, the links chip right of the view chip.
+    assert_eq!(view.y, area.height - 1, "chips ride the bottom border row");
+    assert_eq!(links.y, view.y, "both chips on the same row");
+    assert_eq!(view.width, 8, "\"Markdown\" is 8 columns");
+    assert_eq!(links.width, 7, "\"3 links\" is 7 columns");
+    assert!(
+        links.x >= view.x + view.width,
+        "links sits after the view chip (no overlap)"
+    );
+
+    // The drawn text at each fed-back rect equals the chip label — draw and geometry can't drift.
+    let out = render(&state, 100, 24);
+    assert_eq!(
+        text_at(&out, view),
+        "Markdown",
+        "view chip drawn at its rect\n{out}"
+    );
+    assert_eq!(
+        text_at(&out, links),
+        "3 links",
+        "links chip drawn at its rect\n{out}"
+    );
+}
+
+#[test]
+fn status_bar_singularizes_a_single_link() {
+    let mut state = sample_state();
+    state.content_view_label = Some("Markdown".to_string());
+    state.content_link_count = 1;
+    let geom = geometry(Rect::new(0, 0, 100, 24), &state);
+    let links = geom
+        .status_links_rect
+        .expect("links chip present for 1 link");
+    let out = render(&state, 100, 24);
+    assert_eq!(
+        text_at(&out, links),
+        "1 link",
+        "singular for one link\n{out}"
+    );
+}
+
+#[test]
+fn status_bar_hides_view_and_links_when_no_content() {
+    // No displayed content (empty/dir/launch): both interactive chips are absent.
+    let mut state = sample_state();
+    state.content_view_label = None;
+    state.content_link_count = 0;
+    let geom = geometry(Rect::new(0, 0, 100, 24), &state);
+    assert!(
+        geom.status_view_rect.is_none(),
+        "no view chip without content"
+    );
+    assert!(
+        geom.status_links_rect.is_none(),
+        "no links chip without content"
+    );
+}
+
+#[test]
+fn status_bar_hides_links_chip_when_note_has_no_links() {
+    let mut state = sample_state();
+    state.content_view_label = Some("Source".to_string());
+    state.content_link_count = 0;
+    let geom = geometry(Rect::new(0, 0, 100, 24), &state);
+    assert!(geom.status_view_rect.is_some(), "view chip still shown");
+    assert!(
+        geom.status_links_rect.is_none(),
+        "no links chip at zero links"
+    );
+}
+
+#[test]
+fn status_bar_sheds_least_important_chips_first_on_a_narrow_pane() {
+    // Everything requested, but a narrow content pane can't hold it all. Priority is
+    // help > view > links > annotations, so `? help` survives and the annotation count sheds first.
+    let mut state = sample_state();
+    state.content_view_label = Some("Markdown".to_string());
+    state.content_link_count = 3;
+    state.annotation_count = 7;
+    // Zoom to a single content column so its width is the whole (narrow) frame.
+    state.zoomed = true;
+    let out = render(&state, 30, 10);
+    let border = out.lines().nth(9).unwrap();
+    assert!(
+        border.contains("? help"),
+        "the persistent help hint is kept\n{out}"
+    );
+    assert!(
+        !border.contains("annotations"),
+        "the annotation chip sheds first on a narrow pane\n{out}"
     );
 }
 
@@ -3603,6 +3734,9 @@ fn empty_state_directory_snapshot() {
     state.notices.clear();
     // directory selected → no file content → title falls back to the directory's name.
     state.content_title = None;
+    // No file content landed → no view-type chip either (gated on the displayed content, like the
+    // title), mirroring the controller's `clear_content`.
+    state.content_view_label = None;
     state.content_rendering = false;
     insta::assert_snapshot!("presenter_empty_directory", render(&state, 100, 24));
 }
@@ -3617,6 +3751,8 @@ fn empty_state_no_files_snapshot() {
     state.notices.clear();
     // no file content displayed → title falls back to "Content" (no selected node).
     state.content_title = None;
+    // No displayed content → no view-type chip (gated like the title).
+    state.content_view_label = None;
     state.content_rendering = false;
     insta::assert_snapshot!("presenter_empty_no_files", render(&state, 100, 24));
 }
@@ -3636,6 +3772,9 @@ fn loading_state_snapshot_while_a_render_is_in_flight() {
     state.content = to_text("Rendering\u{2026}");
     state.notices.clear();
     state.content_title = None;
+    // No content has landed yet (launch / re-root), so — like the neutral title — no view-type chip
+    // is shown until the render arrives.
+    state.content_view_label = None;
     state.content_rendering = true;
     insta::assert_snapshot!("presenter_loading", render(&state, 100, 24));
 }

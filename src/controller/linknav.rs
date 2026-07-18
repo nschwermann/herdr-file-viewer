@@ -16,8 +16,9 @@ use crate::wikilink::Anchor;
 const MAX_NOTE_BYTES: u64 = 1024 * 1024;
 
 /// Read up to [`MAX_NOTE_BYTES`] of `path`, lossily decoded as UTF-8. Returns `None` on any I/O
-/// error (never panics), so every caller degrades gracefully to "no links" / "no anchor".
-fn read_note_bounded(path: &Path) -> Option<String> {
+/// error (never panics), so every caller degrades gracefully to "no links" / "no anchor". Shared
+/// with the status bar's link-count cache ([`Controller::recompute_link_count`]).
+pub(super) fn read_note_bounded(path: &Path) -> Option<String> {
     use std::io::Read;
     let file = std::fs::File::open(path).ok()?;
     let mut buf = Vec::new();

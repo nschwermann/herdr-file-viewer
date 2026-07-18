@@ -1501,6 +1501,8 @@ fn wide_geometry() -> PaneGeometry {
         help_body_rows: 0,
         help_vbar: None,
         help_tabs: Vec::new(),
+        status_view_rect: None,
+        status_links_rect: None,
     }
 }
 
@@ -10451,6 +10453,86 @@ fn g_on_vault_markdown_populates_resolved_and_unresolved_links() {
     assert!(rows[0].resolved, "[[Target]] resolves to Target.md");
     assert_eq!(rows[1].display, "Missing Note");
     assert!(!rows[1].resolved, "[[Missing Note]] resolves to no note");
+}
+
+// ── Status bar: link-count cache + interactive chip clicks ────────────────────────────
+
+#[test]
+fn status_bar_link_count_counts_the_displayed_vault_notes_links() {
+    // Home.md holds two followable links ([[Target]] + [[Missing Note]]); the count the status
+    // bar's links chip reads is recomputed when the render lands and must match.
+    let (_dir, ctrl) = link_nav_vault();
+    assert_eq!(
+        ctrl.view_state().content_link_count,
+        2,
+        "the links chip counts every followable link in the displayed note"
+    );
+}
+
+#[test]
+fn status_bar_link_count_is_zero_outside_a_vault() {
+    // A markdown note with a link but no `.obsidian/` ancestor: `g` won't open, so the links chip
+    // is hidden (count 0) — the chip and the navigator stay consistent.
+    let dir = TempDir::new();
+    std::fs::write(dir.path().join("Home.md"), "[[Target]]\n").unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    let home = dir.path().join("Home.md");
+    select_and_settle(&mut ctrl, &home, "Home.md");
+    assert_eq!(
+        ctrl.view_state().content_link_count,
+        0,
+        "no vault → no links chip"
+    );
+}
+
+#[test]
+fn clicking_the_view_chip_cycles_the_view_like_v() {
+    // A left-click on the bottom-border view-type chip cycles the view, exactly as pressing `v`.
+    let (_dir, mut ctrl) = link_nav_vault();
+    assert_eq!(ctrl.selected_view_mode(), Some(ViewMode::RenderedMarkdown));
+    ctrl.set_pane_geometry(PaneGeometry {
+        status_view_rect: Some(Rect {
+            x: 45,
+            y: 23,
+            width: 8,
+            height: 1,
+        }),
+        ..wide_geometry()
+    });
+    // A completed click (press + release) on the chip.
+    ctrl.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 46, 23));
+    let fx = ctrl.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 46, 23));
+    assert!(fx.redraw, "the chip click redraws");
+    assert_eq!(
+        ctrl.selected_view_mode(),
+        Some(ViewMode::SyntaxContent),
+        "clicking the view chip cycles Markdown → Source (like `v`)"
+    );
+    assert!(
+        !ctrl.link_nav_open(),
+        "the view chip does not open the link navigator"
+    );
+}
+
+#[test]
+fn clicking_the_links_chip_opens_the_link_navigator_like_g() {
+    // A left-click on the links chip opens the link navigator, exactly as pressing `g`.
+    let (_dir, mut ctrl) = link_nav_vault();
+    ctrl.set_pane_geometry(PaneGeometry {
+        status_links_rect: Some(Rect {
+            x: 60,
+            y: 23,
+            width: 7,
+            height: 1,
+        }),
+        ..wide_geometry()
+    });
+    ctrl.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 62, 23));
+    ctrl.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 62, 23));
+    assert!(
+        ctrl.link_nav_open(),
+        "clicking the links chip opens the navigator (like `g`)"
+    );
 }
 
 #[test]

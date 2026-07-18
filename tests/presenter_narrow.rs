@@ -63,6 +63,8 @@ fn state(width: u16, focus: Focus) -> ViewState {
         prompt: None,
         content_title: Some("main.rs".to_string()),
         content_rendering: false,
+        content_view_label: Some("Source".to_string()),
+        content_link_count: 0,
         search: None,
         line_select: None,
         content_selection: None,
