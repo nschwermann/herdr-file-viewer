@@ -179,6 +179,9 @@ pub struct ViewState {
     /// When `Some`, the vault quick-switcher overlay is drawn on top of the columns (the `F` key).
     /// `None` ⇒ no overlay. A query + fuzzy-ranked list of the vault's notes, mirroring the finder.
     pub quick_switcher: Option<QuickSwitcherView>,
+    /// When `Some`, the vault global content-search overlay is drawn on top of the columns (the `S`
+    /// key). `None` ⇒ no overlay. A query + a list of note-content hits.
+    pub global_search: Option<GlobalSearchView>,
 }
 
 /// The worktree picker's draw model (an owned snapshot of the controller's picker state, so
@@ -322,6 +325,33 @@ pub struct QuickSwitcherView {
     pub rows: Vec<String>,
     /// Index into `rows` of the highlighted row.
     pub cursor: usize,
+}
+
+/// The global content-search overlay's draw model — a query line plus vault-content hit rows (an
+/// owned snapshot of the controller's [`crate::globalsearch::GlobalSearchState`]). Two-phase: while
+/// `searched` is `false` the box shows a "press Enter to search" hint; after a run with no hits it
+/// shows "no matches".
+#[derive(Debug, Clone)]
+pub struct GlobalSearchView {
+    /// The current query text drawn on the input line.
+    pub query: String,
+    /// The hit rows from the last run (location + preview), in order. Empty before the first run or
+    /// when a run found nothing.
+    pub rows: Vec<GlobalSearchRowView>,
+    /// Index into `rows` of the highlighted row.
+    pub cursor: usize,
+    /// Whether a search has run at least once — distinguishes the "type and press Enter" hint from
+    /// the "no matches" message when `rows` is empty.
+    pub searched: bool,
+}
+
+/// One content-search hit row: where the match is (`note:line`) and the matched line's preview.
+#[derive(Debug, Clone)]
+pub struct GlobalSearchRowView {
+    /// The hit location, `note:line` (the note path, `.md` dropped). Sanitized at draw for AC-27.
+    pub location: String,
+    /// The matched line's (trimmed, capped) text. Sanitized at draw for AC-27.
+    pub preview: String,
 }
 
 /// Owned, typed persistent-indicator projection for the pure Presenter.
@@ -1711,6 +1741,10 @@ pub fn draw(frame: &mut Frame, state: &ViewState) -> (u16, u16) {
     if let Some(qs) = &state.quick_switcher {
         draw_quick_switcher_overlay(frame, frame.area(), qs);
     }
+    // The vault global content search is also a modal overlay (keyboard-only).
+    if let Some(gs) = &state.global_search {
+        draw_global_search_overlay(frame, frame.area(), gs);
+    }
     // Annotation modals are keyboard-only overlays. They add no hit-test geometry; their owned,
     // typed draw models contain raw fields and the Presenter formats/sanitizes them here.
     if let Some(overview) = &state.annotation_overview {
@@ -2656,6 +2690,86 @@ fn draw_quick_switcher_overlay(frame: &mut Frame, area: Rect, qs: &QuickSwitcher
         Some(query_line),
         rows,
         qs.cursor,
+    );
+}
+
+/// The global content-search overlay's top-left title.
+const GLOBAL_SEARCH_TITLE: &str = "Search vault";
+/// The global content-search overlay's key-hint footer.
+const GLOBAL_SEARCH_FOOTER: &str = "type · ⏎ search/open · ↑↓ move · esc cancel";
+/// The prompt prefix shown on the global-search query-input line.
+const GLOBAL_SEARCH_PROMPT: &str = "> ";
+/// The placeholder shown on the global-search query line when the query is empty.
+const GLOBAL_SEARCH_PLACEHOLDER: &str = "> type a query, then Enter to search…";
+/// The hint row shown after a run that found nothing.
+const GLOBAL_SEARCH_NO_MATCHES: &str = "(no matches)";
+
+/// Draw the vault global content search as a centered, bordered overlay (the `S` key): a query line
+/// above the hit rows (each `note:line` + a preview of the matched line), the `cursor` row REVERSED.
+/// Before the first run, or after a run with no hits, a dim hint row stands in for the (empty) list —
+/// never highlighted (its cursor is out of range). Every field is sanitized (AC-27). Delegates layout
+/// to [`draw_list_overlay`].
+fn draw_global_search_overlay(frame: &mut Frame, area: Rect, gs: &GlobalSearchView) {
+    let query_line: Line<'static> = if gs.query.is_empty() {
+        Line::styled(
+            GLOBAL_SEARCH_PLACEHOLDER.to_string(),
+            Style::new().add_modifier(Modifier::DIM),
+        )
+    } else {
+        Line::from(format!(
+            "{GLOBAL_SEARCH_PROMPT}{}",
+            sanitize_control(&gs.query)
+        ))
+    };
+
+    // Real hit rows, or a single dim hint row when there are none (only after a search has run — an
+    // un-searched overlay shows just the query line). The hint uses an out-of-range cursor so
+    // `draw_list_overlay` never REVERSED-highlights it.
+    let (rows, cursor): (Vec<Line<'static>>, usize) = if gs.rows.is_empty() {
+        if gs.searched {
+            (
+                vec![Line::styled(
+                    GLOBAL_SEARCH_NO_MATCHES.to_string(),
+                    Style::new().add_modifier(Modifier::DIM),
+                )],
+                usize::MAX,
+            )
+        } else {
+            (Vec::new(), 0)
+        }
+    } else {
+        let rows = gs
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(i, row)| {
+                let selected = i == gs.cursor;
+                let (loc_style, text_style) = if selected {
+                    (
+                        Style::new().add_modifier(Modifier::REVERSED),
+                        Style::new().add_modifier(Modifier::REVERSED),
+                    )
+                } else {
+                    (Style::new().add_modifier(Modifier::DIM), Style::new())
+                };
+                Line::from(vec![
+                    Span::styled(sanitize_control(&row.location), loc_style),
+                    Span::styled("  ", text_style),
+                    Span::styled(sanitize_control(&row.preview), text_style),
+                ])
+            })
+            .collect();
+        (rows, gs.cursor)
+    };
+
+    draw_list_overlay(
+        frame,
+        area,
+        GLOBAL_SEARCH_TITLE,
+        GLOBAL_SEARCH_FOOTER,
+        Some(query_line),
+        rows,
+        cursor,
     );
 }
 

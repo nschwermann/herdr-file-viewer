@@ -31,8 +31,9 @@ impl Controller {
             // the selection under it.
             | Modal::LinkNav(_)
             | Modal::Outline(_)
-            // The vault quick-switcher is keyboard-only too — swallow the mouse.
+            // The vault quick-switcher and global content search are keyboard-only too — swallow it.
             | Modal::QuickSwitcher(_)
+            | Modal::GlobalSearch(_)
             | Modal::DiscardConfirm(_) => Effects::noop(),
             Modal::LineSelect(_) => self.handle_line_select_mouse(ev),
             Modal::Help(_) => self.handle_help_mouse(ev),

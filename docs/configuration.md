@@ -196,6 +196,7 @@ customized).
 | | `nav_forward` | `]` | Go forward (link navigation) |
 | | `open_outline` | `o` | Open the heading outline of the current markdown note |
 | | `quick_switcher` | `F` | Quick-switch to any note in the vault by name or alias |
+| | `global_search` | `S` | Search the whole vault's note contents |
 | **Session** | `dismiss_update` | `u` | Dismiss the update-available banner for this session |
 | | `switch_worktree` | `W` | Open the worktree picker to re-root at another git worktree |
 | | `show_help` | `?` | Open the in-app help overlay (What's New and About) |

@@ -167,6 +167,23 @@ The vault is discovered from the nearest `.obsidian/` ancestor of your current s
 notes are indexed once and cached; the index is rebuilt when you switch worktree or press `r`
 (refresh), so a note added or renamed *outside* the viewer shows up after a refresh.
 
+## Searching the whole vault (Obsidian vaults)
+
+Where `F` finds a note by its *name*, **`S`** searches note *contents* — the viewer's global search.
+Inside a vault, press `S`, type a query, and press `Enter` to **run** the search across every note's
+text. The results list each hit as `note:line` with a preview of the matched line; move through them
+with `↑` / `↓`, and press `Enter` to open the highlighted hit in-viewer, scrolled to the matched
+line. Editing the query and pressing `Enter` again re-runs the search; `Esc` closes it.
+
+Matching is **literal** and **smartcase**, the same as the in-file `/` search — a lowercase query is
+case-insensitive, a query containing a capital is case-sensitive. This is distinct from `/`, which
+searches only *within* the file you're viewing.
+
+Under the hood the search uses **[ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`)** when it is
+installed (fast, and it honours the vault's `.gitignore` and skips hidden folders like `.obsidian/`).
+If `rg` is not on your `PATH`, a built-in scanner does the same search directly — so the feature
+always works, just a little slower on a large vault.
+
 ## Obsidian markdown rendering
 
 The rendered markdown view (`v`) understands some Obsidian-flavored markdown that `glow` alone does

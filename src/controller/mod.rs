@@ -24,6 +24,7 @@
 mod annotation;
 mod finder;
 mod git_apply;
+mod globalsearch;
 mod help;
 mod infile;
 mod lineselect;
@@ -37,6 +38,7 @@ mod tagfilter;
 use crate::annotation::AnnotationStore;
 use crate::finder::FinderState;
 use crate::git::{Baseline, Status};
+use crate::globalsearch::GlobalSearchState;
 use crate::help::{HelpSection, HelpSectionState, HelpState};
 use crate::herdr::HerdrCli;
 use crate::infile::{PromptMode, PromptState, SearchState};
@@ -329,6 +331,9 @@ enum Modal {
     /// The vault quick-switcher (the `F` key): a query + fuzzy-ranked list of the containing vault's
     /// notes (by name/alias). Keyboard-only, like the finder; a re-root resets it to `Modal::None`.
     QuickSwitcher(SwitcherState),
+    /// The vault global content search (the `S` key): a query + a list of note-content hits. Two-phase
+    /// (Enter runs, then opens). Keyboard-only; a re-root resets it to `Modal::None`.
+    GlobalSearch(GlobalSearchState),
     /// The confirm raised when an action would discard unexported annotations. Carries what to do
     /// once the user decides; the store it guards is the controller's.
     DiscardConfirm(DiscardAction),
@@ -486,6 +491,18 @@ impl Modal {
     fn quick_switcher_mut(&mut self) -> Option<&mut SwitcherState> {
         match self {
             Modal::QuickSwitcher(s) => Some(s),
+            _ => None,
+        }
+    }
+    fn global_search(&self) -> Option<&GlobalSearchState> {
+        match self {
+            Modal::GlobalSearch(s) => Some(s),
+            _ => None,
+        }
+    }
+    fn global_search_mut(&mut self) -> Option<&mut GlobalSearchState> {
+        match self {
+            Modal::GlobalSearch(s) => Some(s),
             _ => None,
         }
     }
@@ -777,6 +794,11 @@ pub struct Controller {
     /// refresh (so an out-of-band edit is picked up); keyed by vault root, so a different vault
     /// rebuilds it. Session-only, in-memory (constitution: no persistent store).
     vault_index: Option<crate::vault_index::VaultIndex>,
+    /// The injected vault content-search seam (ripgrep, in `app.rs`) for the `S` global search, so the
+    /// controller never spawns a subprocess directly and tests stay hermetic. Injected post-
+    /// construction via [`set_searcher`](Self::set_searcher); `None` in tests, where the search falls
+    /// back to the pure in-Rust [`crate::vsearch::search_fallback`] (deterministic, no process).
+    searcher: Option<Box<dyn crate::vsearch::ContentSearcher>>,
     /// The effective key -> intent bindings the run loop decodes against (Slice B, T-6): the
     /// keybinding registry resolved with the config's `[keys]` overrides (config > default).
     /// Initialized to [`default_bindings`](crate::input::default_bindings) so a controller always
@@ -908,6 +930,7 @@ impl Controller {
             tag_index: None,
             active_tag: None,
             vault_index: None,
+            searcher: None,
             // Valid default bindings so the run loop can decode before (and if) `app::run` wires the
             // config's `[keys]` overrides via `set_keybindings`; tests inherit these unchanged.
             bindings: crate::input::default_bindings(),
@@ -1291,6 +1314,14 @@ impl Controller {
         self.neovim_editor = Some(editor);
     }
 
+    /// Inject the vault content-search seam (ripgrep) for the `S` global search. Post-construction
+    /// (like [`set_opener`](Self::set_opener)) so production wires the live ripgrep-or-fallback
+    /// searcher and tests leave it unset — where the search uses the pure in-Rust fallback directly,
+    /// so it stays hermetic (no subprocess).
+    pub fn set_searcher(&mut self, searcher: Box<dyn crate::vsearch::ContentSearcher>) {
+        self.searcher = Some(searcher);
+    }
+
     /// Enable inline media preview (only when `media_preview` is on and the app's graphics picker
     /// reports a real protocol). `cap` carries the env graphics hint + video poster tool; `enabled`
     /// is whether an inline image can actually paint. Post-construction, like
@@ -1663,6 +1694,7 @@ impl Controller {
             link_nav: self.link_nav_view(),
             outline: self.outline_view(),
             quick_switcher: self.quick_switcher_view(),
+            global_search: self.global_search_view(),
         }
     }
 
@@ -1799,6 +1831,11 @@ impl Controller {
         if self.modal.quick_switcher().is_some() {
             return Effects::noop();
         }
+        // The global content search is modal too: the run loop routes raw keys to
+        // `handle_global_search_key` while it is open. Guard structurally — symmetric with the finder.
+        if self.modal.global_search().is_some() {
+            return Effects::noop();
+        }
         match intent {
             Intent::NavUp => self.navigate(-1),
             Intent::NavDown => self.navigate(1),
@@ -1858,6 +1895,7 @@ impl Controller {
             Intent::OpenLinkNav => self.open_link_nav(),
             Intent::OpenOutline => self.open_outline(),
             Intent::OpenQuickSwitcher => self.open_quick_switcher(),
+            Intent::OpenGlobalSearch => self.open_global_search(),
             Intent::NavBack => self.nav_back(),
             Intent::NavForward => self.nav_forward(),
             Intent::ShowHelp => self.open_help(),

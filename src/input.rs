@@ -409,6 +409,13 @@ pub(crate) const REGISTRY: &[Binding] = &[
         category: "Search & jump",
     },
     Binding {
+        intent: Intent::OpenGlobalSearch,
+        name: "global_search",
+        default_keys: &[KeyCode::Char('S')],
+        description: "Search the whole vault's note contents.",
+        category: "Search & jump",
+    },
+    Binding {
         intent: Intent::TreeScrollLeft,
         name: "tree_scroll_left",
         default_keys: &[KeyCode::Char('H')],
@@ -750,6 +757,7 @@ mod tests {
         (KeyCode::Char('g'), Intent::OpenLinkNav),
         (KeyCode::Char('o'), Intent::OpenOutline),
         (KeyCode::Char('F'), Intent::OpenQuickSwitcher),
+        (KeyCode::Char('S'), Intent::OpenGlobalSearch),
         (KeyCode::Char('['), Intent::NavBack),
         (KeyCode::Char(']'), Intent::NavForward),
         (KeyCode::Char('H'), Intent::TreeScrollLeft),

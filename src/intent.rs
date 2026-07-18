@@ -163,6 +163,11 @@ pub enum Intent {
     /// ⌘O). Read-only navigation — it only moves the in-pane selection (AC-N1, AC-N3). Opens only
     /// inside a vault; otherwise it shows a notice and opens nothing.
     OpenQuickSwitcher,
+    /// Open the vault global content search (`S`): grep the whole vault's note *contents* for a
+    /// typed query (ripgrep when present, a pure fallback otherwise), list the hits, and open the
+    /// chosen one in-viewer at the matched line. Read-only navigation — it only moves the in-pane
+    /// selection (AC-N1, AC-N3). Opens only inside a vault; otherwise it shows a notice.
+    OpenGlobalSearch,
     /// Close the viewer and return control to the prior pane (AC-20).
     Close,
 }
@@ -170,7 +175,7 @@ pub enum Intent {
 impl Intent {
     /// Every intent variant — lets the dispatcher and tests enumerate the closed set so
     /// keyboard-completeness (AC-18) and the no-file/git-mutation invariant (AC-N3) stay checkable.
-    pub const ALL: [Intent; 42] = [
+    pub const ALL: [Intent; 43] = [
         Intent::NavUp,
         Intent::NavDown,
         Intent::Expand,
@@ -211,6 +216,7 @@ impl Intent {
         Intent::NavBack,
         Intent::NavForward,
         Intent::OpenQuickSwitcher,
+        Intent::OpenGlobalSearch,
         Intent::ShowHelp,
         Intent::Close,
     ];
@@ -268,6 +274,7 @@ mod tests {
                 | Intent::NavBack
                 | Intent::NavForward
                 | Intent::OpenQuickSwitcher
+                | Intent::OpenGlobalSearch
                 | Intent::ShowHelp
                 | Intent::Close => (false, false),
             };
@@ -342,11 +349,11 @@ mod tests {
     }
 
     #[test]
-    fn all_length_is_42() {
+    fn all_length_is_43() {
         assert_eq!(
             Intent::ALL.len(),
-            42,
-            "Intent::ALL must have exactly 42 variants after adding OpenQuickSwitcher"
+            43,
+            "Intent::ALL must have exactly 43 variants after adding OpenGlobalSearch"
         );
     }
 
@@ -355,6 +362,14 @@ mod tests {
         assert!(
             Intent::ALL.contains(&Intent::OpenQuickSwitcher),
             "Intent::ALL must contain OpenQuickSwitcher"
+        );
+    }
+
+    #[test]
+    fn open_global_search_is_in_all() {
+        assert!(
+            Intent::ALL.contains(&Intent::OpenGlobalSearch),
+            "Intent::ALL must contain OpenGlobalSearch"
         );
     }
 

@@ -6,8 +6,8 @@ use herdr_file_viewer::git::Status;
 use herdr_file_viewer::presenter::{
     AnnotationEditorKind, AnnotationEditorView, AnnotationIndicatorsView, AnnotationOverviewView,
     AnnotationRowView, AnnotationTargetView, CharSelView, ContentSearch, DiscardConfirmView,
-    FinderView, Focus, HelpView, LineSelectView, PickerRowView, PickerView, QuickSwitcherView,
-    ViewState, draw,
+    FinderView, Focus, GlobalSearchRowView, GlobalSearchView, HelpView, LineSelectView,
+    PickerRowView, PickerView, QuickSwitcherView, ViewState, draw,
 };
 use herdr_file_viewer::render::to_text;
 use herdr_file_viewer::search::Match;
@@ -109,6 +109,7 @@ fn sample_state() -> ViewState {
         link_nav: None,
         outline: None,
         quick_switcher: None,
+        global_search: None,
     }
 }
 
@@ -4668,4 +4669,64 @@ fn quick_switcher_overlay_shows_rows_and_highlights_cursor() {
         }
     }
     assert!(found_reversed_beta, "the cursor row is highlighted\n{out}");
+}
+
+// ---- Global content-search overlay ----------------------------------------------------
+
+fn global_search_state(
+    query: &str,
+    rows: Vec<(&str, &str)>,
+    cursor: usize,
+    searched: bool,
+) -> ViewState {
+    let mut state = sample_state();
+    state.global_search = Some(GlobalSearchView {
+        query: query.to_string(),
+        rows: rows
+            .into_iter()
+            .map(|(loc, prev)| GlobalSearchRowView {
+                location: loc.to_string(),
+                preview: prev.to_string(),
+            })
+            .collect(),
+        cursor,
+        searched,
+    });
+    state
+}
+
+#[test]
+fn global_search_overlay_empty_shows_title_and_prompt() {
+    let out = render(&global_search_state("", vec![], 0, false), 100, 24);
+    assert!(
+        out.contains("Search vault"),
+        "the search title is shown\n{out}"
+    );
+    assert!(
+        out.contains("Enter to search"),
+        "the prompt hint is shown\n{out}"
+    );
+}
+
+#[test]
+fn global_search_overlay_shows_hits_with_location_and_preview() {
+    let state = global_search_state(
+        "needle",
+        vec![("A:2", "the needle here"), ("C:1", "another needle line")],
+        0,
+        true,
+    );
+    let out = render(&state, 100, 24);
+    assert!(out.contains("A:2"), "hit location shown\n{out}");
+    assert!(out.contains("the needle here"), "hit preview shown\n{out}");
+    assert!(out.contains("C:1"), "second hit shown\n{out}");
+}
+
+#[test]
+fn global_search_overlay_no_matches_after_a_run() {
+    let out = render(&global_search_state("zzz", vec![], 0, true), 100, 24);
+    assert!(
+        out.contains("no matches"),
+        "the no-matches hint is shown\n{out}"
+    );
 }

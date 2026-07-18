@@ -230,6 +230,10 @@ pub fn run() -> io::Result<()> {
     controller.set_inline_media(media_cap, inline_media);
     // Share the Properties-panel flag with the controller so the `p` key flips it and re-renders.
     controller.set_properties_toggle(Arc::clone(&properties_shown));
+    // Inject the live vault content searcher (the `S` global search): ripgrep when it is on PATH,
+    // else a pure in-Rust fallback (`vsearch::search`). Behind the seam so the controller — and its
+    // tests — never spawn a subprocess; an un-wired controller uses the fallback directly.
+    controller.set_searcher(Box::new(LiveSearcher));
 
     let mut terminal = ratatui::try_init()?;
     // Build the inline-image painter now that the terminal is up (its protocol query needs the live
@@ -413,6 +417,22 @@ fn event_loop(
                     }
                     dirty |= fx.redraw;
                 }
+                // While the global content search is open, route every key press to
+                // `handle_global_search_key` so printable keys edit the query instead of firing
+                // viewer intents. Mutually exclusive with the other modal arms.
+                Event::Key(key)
+                    if key.kind == KeyEventKind::Press && controller.global_search_open() =>
+                {
+                    let fx = controller.handle_global_search_key(key);
+                    if fx.clear {
+                        let _ = terminal.clear();
+                        dirty = true;
+                    }
+                    if fx.quit {
+                        return Ok(()); // the global search never quits; harmless for symmetry
+                    }
+                    dirty |= fx.redraw;
+                }
                 // While a bottom prompt (go-to-line) is open, route every key press to handle_prompt_key so
                 // digits/printables edit the prompt instead of firing viewer intents (AC-21). Mutually exclusive
                 // with the finder arm above — only one modal is ever open.
@@ -552,6 +572,23 @@ impl GitService for LiveGit {
             self.base_hint.as_deref(),
             full_context,
         )
+    }
+}
+
+/// The live vault content searcher for the `S` global search: delegates to
+/// [`crate::vsearch::search`], which uses ripgrep when it is on `PATH` and a pure in-Rust scan
+/// otherwise. Read-only — it only greps note contents. Behind the injected seam so the controller
+/// never spawns a subprocess directly (AGENTS.md: external commands are injected).
+struct LiveSearcher;
+
+impl crate::vsearch::ContentSearcher for LiveSearcher {
+    fn search(
+        &self,
+        vault_root: &Path,
+        query: &str,
+        limit: usize,
+    ) -> Vec<crate::vsearch::SearchHit> {
+        crate::vsearch::search(vault_root, query, limit)
     }
 }
 

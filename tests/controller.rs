@@ -10896,6 +10896,13 @@ fn type_switcher(ctrl: &mut Controller, q: &str) {
     }
 }
 
+/// Type each char of `q` into the global content search (each a bare `Char` key).
+fn type_global_search(ctrl: &mut Controller, q: &str) {
+    for c in q.chars() {
+        ctrl.handle_global_search_key(key(KeyCode::Char(c)));
+    }
+}
+
 #[test]
 fn clicking_a_tag_filters_the_tree_and_esc_clears_it() {
     // End-to-end: a rendered note shows a `#ryoshi-games` tag; a content click on it filters the
@@ -11063,4 +11070,118 @@ fn quick_switcher_esc_closes_without_navigating() {
         before,
         "Esc leaves the selection untouched"
     );
+}
+
+// ---- Feature: vault global content search (`S`) -------------------------------------------
+
+#[test]
+fn global_search_opens_in_vault_runs_on_enter_and_opens_a_hit_at_its_line() {
+    let (_dir, mut ctrl) = vault_controller(&[
+        ("A.md", "first line\nthe needle here\nlast"),
+        ("sub/B.md", "no match in here\n"),
+        ("C.md", "another needle line"),
+    ]);
+
+    let fx = ctrl.handle(Intent::OpenGlobalSearch);
+    assert!(
+        fx.redraw && ctrl.global_search_open(),
+        "S opens the search in a vault"
+    );
+    // Before running, no result rows (just the query line).
+    assert!(
+        ctrl.view_state().global_search.unwrap().rows.is_empty(),
+        "no rows before the first Enter"
+    );
+
+    // Type a query — still no results until Enter (two-phase).
+    type_global_search(&mut ctrl, "needle");
+    assert!(
+        ctrl.view_state().global_search.unwrap().rows.is_empty(),
+        "typing does not run the search (two-phase)"
+    );
+
+    // Enter runs the search (uses the pure fallback — no searcher injected — so it's hermetic).
+    ctrl.handle_global_search_key(key(KeyCode::Enter));
+    let gs = ctrl.view_state().global_search.unwrap();
+    assert!(gs.searched, "a search has run");
+    assert_eq!(
+        gs.rows.len(),
+        2,
+        "two notes contain 'needle': {:?}",
+        gs.rows
+    );
+    // The A.md hit is on line 2 and its location reads `A:2` (walk order isn't fixed, so locate it).
+    let a_idx = gs
+        .rows
+        .iter()
+        .position(|r| r.location == "A:2")
+        .unwrap_or_else(|| panic!("an A:2 hit exists: {:?}", gs.rows));
+
+    // Move the cursor to the A:2 hit, then a second Enter (query unchanged) opens it at its line.
+    for _ in 0..a_idx {
+        ctrl.handle_global_search_key(key(KeyCode::Down));
+    }
+    ctrl.handle_global_search_key(key(KeyCode::Enter));
+    assert!(
+        !ctrl.global_search_open(),
+        "opening a hit closes the overlay"
+    );
+    assert_eq!(
+        ctrl.tree().selected().unwrap().path.file_name().unwrap(),
+        "A.md",
+        "the chosen hit's note is revealed"
+    );
+    // The jump to the matched line is queued (source-mapped view + pending goto).
+    assert_eq!(
+        ctrl.pending_goto_line(),
+        Some(2),
+        "opening the hit queues a scroll to the matched line (2)"
+    );
+}
+
+#[test]
+fn global_search_reruns_after_editing_the_query() {
+    let (_dir, mut ctrl) = vault_controller(&[("A.md", "alpha\nbeta\n")]);
+    ctrl.handle(Intent::OpenGlobalSearch);
+    type_global_search(&mut ctrl, "alpha");
+    ctrl.handle_global_search_key(key(KeyCode::Enter));
+    assert_eq!(ctrl.view_state().global_search.unwrap().rows.len(), 1);
+
+    // Backspace the whole query and type a new one → Enter re-runs (does not open a hit).
+    for _ in 0..5 {
+        ctrl.handle_global_search_key(key(KeyCode::Backspace));
+    }
+    type_global_search(&mut ctrl, "beta");
+    ctrl.handle_global_search_key(key(KeyCode::Enter));
+    assert!(
+        ctrl.global_search_open(),
+        "an edited query re-runs, not opens"
+    );
+    let gs = ctrl.view_state().global_search.unwrap();
+    assert!(
+        gs.rows.iter().any(|r| r.location == "A:2"),
+        "the new query finds 'beta' on line 2: {:?}",
+        gs.rows
+    );
+}
+
+#[test]
+fn global_search_notice_outside_a_vault() {
+    let dir = TempDir::new();
+    std::fs::write(dir.path().join("note.md"), "content").unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    let fx = ctrl.handle(Intent::OpenGlobalSearch);
+    assert!(
+        fx.redraw && !ctrl.global_search_open(),
+        "no vault → no overlay"
+    );
+    assert_eq!(ctrl.action_notice(), Some("Not in an Obsidian vault"));
+}
+
+#[test]
+fn global_search_esc_closes() {
+    let (_dir, mut ctrl) = vault_controller(&[("A.md", "x")]);
+    ctrl.handle(Intent::OpenGlobalSearch);
+    ctrl.handle_global_search_key(key(KeyCode::Esc));
+    assert!(!ctrl.global_search_open(), "Esc closes the search");
 }

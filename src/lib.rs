@@ -12,6 +12,7 @@ pub mod editor;
 pub mod finder;
 pub mod fuzzy;
 pub mod git;
+pub mod globalsearch;
 pub mod help;
 pub mod herdr;
 pub mod highlight;
@@ -43,6 +44,7 @@ pub mod tree;
 pub mod update;
 pub mod vault_index;
 pub mod view_policy;
+pub mod vsearch;
 pub mod wikilink;
 pub mod worktree;
 
