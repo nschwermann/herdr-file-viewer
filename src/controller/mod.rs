@@ -1237,6 +1237,15 @@ impl Controller {
         self.inline_media_enabled = enabled;
     }
 
+    /// Whether a modal overlay (help `?`, finder, worktree picker, outline, wikilink navigator,
+    /// annotations, go-to-line/search prompt, …) is open over the content pane. The app suppresses
+    /// the inline media image while one is — otherwise the terminal graphic, drawn above the text
+    /// cells, would sit on top of the modal. The decoded image stays cached, so closing the modal
+    /// re-shows it without re-decoding (or, for a video, re-running ffmpeg).
+    pub fn content_overlay_open(&self) -> bool {
+        !matches!(self.modal, Modal::None)
+    }
+
     /// The inline-media descriptor for the *currently displayed* file, or `None` when inline media
     /// is disabled, the display isn't a recognized image/video, or a video has no poster tool. The
     /// app's `MediaPane` reads this each loop tick to (de)load the image protocol, and the draw

@@ -10026,6 +10026,39 @@ fn inline_media_is_none_for_a_video_without_a_poster_tool() {
 }
 
 #[test]
+fn a_modal_overlay_suppresses_the_inline_image() {
+    // Opening a modal (e.g. `?` help) reports the content pane as covered, so the app skips
+    // painting the image (else the terminal graphic would sit on top of the modal). The image
+    // descriptor itself is unchanged — the decoded image stays cached — so closing re-shows it.
+    let dir = TempDir::new();
+    std::fs::write(dir.path().join("pic.png"), [0x89, b'P', b'N', b'G']).unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    ctrl.set_inline_media(capable_media_cap(), true);
+    await_marker(&mut ctrl, "stub-content");
+    assert!(
+        !ctrl.content_overlay_open(),
+        "no overlay before opening one"
+    );
+    assert!(ctrl.inline_media().is_some(), "the image is displayed");
+
+    ctrl.handle(Intent::ShowHelp);
+    assert!(
+        ctrl.content_overlay_open(),
+        "the help overlay covers the pane"
+    );
+    assert!(
+        ctrl.inline_media().is_some(),
+        "the image descriptor persists (cache kept) even while suppressed"
+    );
+
+    ctrl.handle_help_key(key(KeyCode::Esc)); // close the help overlay (help owns its keys)
+    assert!(
+        !ctrl.content_overlay_open(),
+        "overlay closed → image paints again"
+    );
+}
+
+#[test]
 fn inline_media_is_none_for_a_non_media_file() {
     // A `.rs` is not media → nothing inline, whatever the capability.
     let dir = TempDir::new();

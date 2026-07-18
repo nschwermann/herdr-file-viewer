@@ -300,9 +300,18 @@ fn event_loop(
         {
             dirty = true; // a newly-loaded image needs a paint even if nothing else changed
         }
+        // Suppress the image while a modal overlay (help `?`, finder, outline, …) covers the
+        // content pane — the terminal graphic draws above text cells, so it would otherwise sit on
+        // top of the modal. The decoded image stays cached (sync above ran with the real value), so
+        // closing the modal re-shows it without re-decoding / re-running ffmpeg.
+        let overlay_open = controller.content_overlay_open();
         if dirty {
             let media_pane = media_pane.as_deref_mut();
-            let inline_media = inline_media.as_ref();
+            let inline_media = if overlay_open {
+                None
+            } else {
+                inline_media.as_ref()
+            };
             terminal.draw(|frame| {
                 controller.set_width(frame.area().width);
                 let view: ViewState = controller.view_state();
