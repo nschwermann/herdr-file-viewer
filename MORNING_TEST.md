@@ -42,3 +42,89 @@ history). A click on plain text still just focuses the pane; drag-to-select-text
   (the per-line scan sees only half). Use `g` for those. Wikilinks rarely wrap.
 - Built the content hit-test (`content_target_at` → `ContentTarget`) as a reusable seam so the
   clickable-tags feature (B) and the interactive status bar (C) can extend it.
+
+---
+
+## A — rendering glowup (callout boxes + highlighted links)
+
+**What changed:** two upgrades to the **rendered markdown view** (`v`) so it reads more like Obsidian.
+Both are a new **post-render styling pass** (`src/mdstyle.rs`) that runs over `glow`'s output — we
+keep delegating the actual markdown rendering to `glow`, and only re-color the spans it produced.
+
+1. **Highlighted links.** `[[wikilinks]]`, aliased `[[target|alias]]`, note `![[embeds]]`, and
+   standard `[text](target)` links now render in a distinct **underlined purple** link colour
+   (`rgb(183,148,244)`) instead of `glow`'s plain body colour, so they pop out of the text.
+2. **Callout boxes.** Obsidian callouts (`> [!note]`, `> [!tip]`, `> [!warning]`, `> [!danger]`, …)
+   now render as a **titled box with a per-type accent colour and a faint filled background tint**:
+   an accent-coloured bold title + an accent-coloured left bar, over a subtle dark tint that fills
+   the whole block. Accents: note/info/todo = **blue**, tip/summary = **cyan**, success = **green**,
+   warning/question = **yellow**, danger/failure/bug = **red**, example = **purple**, quote = gray.
+   The type icon, custom title, and foldable `▸`/`▾` marker from before are all kept.
+
+**How to test (Ghostty):**
+1. Refresh the plugin:
+   ```
+   cd ~/Workspace/herdr-file-viewer && cargo build --release
+   # then in herdr: close the viewer pane (q) and reopen it (Ctrl+Space f)
+   ```
+2. Open a note that has both callouts and links — a good one has, e.g.:
+   ```markdown
+   Body text with a [[Some Note]] and an aliased [[Target Note|nice name]] link,
+   a note embed ![[Another Note]], and a [markdown link](Other.md).
+
+   > [!note] Heads up
+   > This is a note callout body.
+
+   > [!tip] Pro tip
+   > Stay hydrated.
+
+   > [!warning] Careful
+   > Watch out for this.
+
+   > [!danger] Do not
+   > This is dangerous.
+
+   > A plain blockquote (NOT a callout) — should stay un-tinted.
+   ```
+   (If you don't have one handy, drop that into a note inside your vault and open it.)
+3. In the rendered view (`v`), confirm:
+   - The four wikilink/embed/markdown-link forms are **purple + underlined**.
+   - Each callout is a **filled tinted box** with an accent title/left-bar in its type colour
+     (note=blue, tip=cyan, warning=yellow, danger=red).
+   - The **plain blockquote** at the bottom is a normal blockquote — **no tint** (proves we don't
+     colour every blockquote, only real callouts).
+4. Cycle to the **source view** (`v` again): it should show the raw, **un-styled** markup — the
+   glowup is rendered-view only, never the source or diffs.
+
+**Decisions / trade-offs:**
+- **Delegate-rendering preserved.** `glow` still does the markdown; `mdstyle` only patches ratatui
+  `Style`s onto the already-ingested spans (same span-resegmentation trick as `src/highlight.rs`).
+  No new crates, nothing writes your files.
+- **Callout detection = glow's blockquote border + our icon/LABEL header.** `mdnote` already rewrites
+  `> [!type] title` into `> **<icon> LABEL — title**` before glow; glow renders every blockquote line
+  with a `│ ` left border. So `mdstyle` finds a callout by: a `│` line whose content starts with one
+  of our icons + an ALL-CAPS label, then tints that line and the following `│` lines until a
+  non-blockquote line. This is why a **plain blockquote isn't tinted** and consecutive callouts each
+  get their own accent. A drift-guard test renders every Obsidian callout type through `mdnote` and
+  asserts `mdstyle` still detects it, so the two can't silently diverge. Custom callout types (glow
+  shows them with the `▸` note icon) fall back to the **blue** note accent.
+- **Links: wikilinks are matched by literal markup; markdown links by glow's underline.** glow passes
+  `[[…]]`/`![[…]]` through verbatim, so we find that markup in the rendered line's plain text (using
+  `wikilink::parse_links` on the *pre-glow* source to know which links are real, so markup inside
+  code blocks is skipped) and re-color the run. Standard `[text](target)` links are rewritten by glow
+  (it splits the text from the URL and underlines the URL) — underline is glow's **only** link-URL
+  signal in its dark theme, so we re-color underlined spans to the link colour. Net effect: the URL
+  of a markdown link becomes purple+underlined; its link *text* keeps glow's own emphasis.
+- **Known small imperfections (documented, not blockers):**
+  - We restyle the wikilink markup in place — the `[[ ]]` brackets stay visible (Obsidian hides them
+    and shows just the alias). Making them disappear would mean *rewriting* the source, not restyling,
+    which the recommended approach avoids.
+  - If the *identical* `[[markup]]` appears both as a real link and inside a code block in the same
+    note, both get colored (we can't tell prose from code once glow has flattened it). Rare.
+  - A wikilink that glow *wraps* across two display lines won't be colored as a whole (same per-line
+    limitation as the click-to-follow feature). Wikilinks rarely wrap.
+  - The callout background tint is tuned for a **dark** theme (the same one `glow` renders with,
+    `-s dark`). On a light terminal the tint would look off — but the viewer already assumes glow's
+    dark palette.
+- **Colours** live as constants at the top of `src/mdstyle.rs` (`LINK_FG`, the `Accent` fg/bg pairs)
+  if you want to tweak the palette later.

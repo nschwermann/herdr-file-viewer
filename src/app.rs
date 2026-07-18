@@ -705,6 +705,15 @@ impl ContentProvider for LiveContent {
         // Turn each planned embed's sentinel line into a reserved blank band and collect the
         // resulting `MediaEmbed`s (empty for every non-markdown / embed-free render).
         let (content, embeds) = reserve_embeds(content, &embed_plan);
+        // Obsidian rendering glowup (rendered-markdown view ONLY): a pure post-render pass that
+        // restyles wikilink/embed/markdown-link markup in the link colour and turns callouts into
+        // titled, tinted boxes. Never touches the source view or diffs. The pre-glow markdown (the
+        // sentinel-injected `prepared` text) tells it which wikilinks are real (not inside code).
+        let content = if mode == ViewMode::RenderedMarkdown {
+            crate::mdstyle::style_rendered_markdown(content, prepared_text(&prepared))
+        } else {
+            content
+        };
         RenderResult {
             content,
             notices: notice.into_iter().collect(),
@@ -765,6 +774,15 @@ impl LiveContent {
         }
         let injected = crate::mdembed::inject(&transformed, &replacements);
         (set_prepared_text(prepared, injected), plan)
+    }
+}
+
+/// The text a [`Prepared`] carries (the markdown fed to glow), or `""` for a binary placeholder —
+/// used by the rendered-markdown styling pass to find real (non-code) wikilinks in the source.
+fn prepared_text(prepared: &Prepared) -> &str {
+    match prepared {
+        Prepared::Full { text } | Prepared::Truncated { text, .. } => text,
+        Prepared::Binary => "",
     }
 }
 
@@ -2109,6 +2127,45 @@ mod tests {
             video_poster: false,
             show_properties: Arc::new(AtomicBool::new(true)),
         }
+    }
+
+    /// The rendering glowup wiring: the rendered-markdown view restyles wikilink markup in the link
+    /// colour (purple), while the source (`v`) view leaves it plain. Uses `cat` renderers so the
+    /// assertion is hermetic (independent of glow).
+    #[cfg(unix)]
+    #[test]
+    fn rendered_markdown_restyles_wikilinks_but_source_view_does_not() {
+        let root = tmp("md-linkstyle");
+        let md = root.join("note.md");
+        std::fs::write(&md, "See [[Some Note]] for details.\n").unwrap();
+        let content = cat_md_content(&root);
+        // The Obsidian link colour (see `mdstyle`'s `LINK_FG`).
+        let link_fg = Color::Rgb(183, 148, 244);
+
+        let rendered = content.render_at_width(&md, ViewMode::RenderedMarkdown, None, None);
+        let linked: String = rendered
+            .content
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .filter(|s| s.style.fg == Some(link_fg))
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(
+            linked.contains("[[Some Note]]"),
+            "the rendered view restyles the wikilink: {linked:?}"
+        );
+
+        // The source view (SyntaxContent) is never restyled.
+        let raw = content.render_at_width(&md, ViewMode::SyntaxContent, None, None);
+        let raw_linked = raw
+            .content
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .any(|s| s.style.fg == Some(link_fg));
+        assert!(!raw_linked, "the source view leaves wikilinks unstyled");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]

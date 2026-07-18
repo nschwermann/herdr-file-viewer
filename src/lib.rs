@@ -24,6 +24,7 @@ pub mod launch;
 pub mod linknav;
 pub mod mdembed;
 pub mod mdnote;
+pub mod mdstyle;
 pub mod media;
 pub mod obsidian;
 pub mod opener;

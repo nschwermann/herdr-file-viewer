@@ -124,17 +124,27 @@ jump from a rendered view.
 ## Obsidian markdown rendering
 
 The rendered markdown view (`v`) understands some Obsidian-flavored markdown that `glow` alone does
-not, by rewriting the note before it is rendered. These apply to any markdown note; the source view
-(cycle to it with `v`) always shows the file untouched.
+not — by rewriting the note before it is rendered, and by restyling `glow`'s output afterward. These
+apply to any markdown note; the source view (cycle to it with `v`) always shows the file untouched.
 
 - **Properties panel.** A note's YAML frontmatter (the `--- … ---` block at the top) renders as a
   clean **Properties** table above the body — `tags` / `aliases` as chips, URLs as links — instead
   of being hidden. Press **`p`** to show / hide it, like Obsidian (shown by default). With it hidden,
   the frontmatter is suppressed entirely and only the body renders.
 - **Callouts.** A `> [!note]`, `> [!warning]`, `> [!tip]`, `> [!important]` … block renders as a
-  titled, bordered box rather than a literal `[!note]` blockquote. A custom title after the type is
-  kept (`> [!warning] Heads up`), and a foldable marker (`> [!note]-` / `+`) shows a `▸` / `▾`
-  indicator. Unknown types fall back to a generic titled box.
+  titled box with a **per-type accent colour** — note/info/todo = blue, tip/summary = cyan,
+  success = green, warning/question = yellow, danger/failure/bug = red, example = purple, quote =
+  gray — shown as an accent-coloured title and left bar over a faint filled background tint, rather
+  than a literal `[!note]` blockquote. A custom title after the type is kept (`> [!warning] Heads
+  up`), and a foldable marker (`> [!note]-` / `+`) shows a `▸` / `▾` indicator. Unknown types fall
+  back to the note (blue) accent. The tint is tuned for a dark theme (the same one `glow` renders
+  with).
+- **Highlighted links.** `[[wikilinks]]`, aliased `[[target|links]]`, note `![[embeds]]`, and
+  standard `[text](target)` links render in a distinct **underlined link colour** (an Obsidian-like
+  purple) so they stand out from body text, instead of `glow`'s plain body colour. The wikilink
+  brackets themselves are kept (the viewer restyles rather than rewrites the markup); a link written
+  inside a code block stays plain, unless the *identical* markup also appears as a real link in the
+  same note.
 - **Task checkboxes.** Task-list items render with checkbox glyphs — `- [ ]` as `☐` and `- [x]` as
   `☑` — so a to-do reads as a checklist. This is **display only**: the viewer is read-only
   (see the [constitution](../constitution.md)), so it never writes a toggled state back to the file —
