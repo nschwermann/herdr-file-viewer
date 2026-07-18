@@ -40,7 +40,7 @@ A config key always wins. Only two keys also have an environment-variable fallba
 config key and above the built-in default — `editor` (`$EDITOR`) and `update_check`
 (`$HERDR_FILE_VIEWER_NO_UPDATE_CHECK`) — giving those two a `config > env > default` chain. Every
 other key (`markdown`, `diff`, `syntax`, `open`, `reveal`, `neovim`, `hide_dotfiles`,
-`media_preview`, `obsidian_editor`, `confirm_discard`, `scroll_lines`, `tree_width`,
+`media_preview`, `heading_banners`, `obsidian_editor`, `confirm_discard`, `scroll_lines`, `tree_width`,
 `tree_position`, `tree_max_cols`, `preview_max_lines`, `preview_max_kib`) has no
 applicable environment variable; for those it's `config > default` only.
 
@@ -62,6 +62,7 @@ reveal = "nautilus"
 hide_dotfiles = false       # true to hide dotfiles at startup (the `.` key still toggles)
 obsidian_editor = true      # `e` opens a vault .md in Obsidian (false = always use the editor)
 media_preview = true        # auto-display images/videos inline in the content pane (false to disable)
+heading_banners = true      # H1/H2 headings as full-width accent bars in rendered markdown (false = plain bold)
 update_check = true         # false to disable the once-a-day update check
 confirm_discard = true      # false to discard annotations without confirming (on quit / worktree switch)
 scroll_lines = 3            # mouse-wheel step (content/search/help), a 1 to 10 scale: 1 slow · 3 medium · 6 fast · 10 max
@@ -103,6 +104,13 @@ dimensions, and size shown above) on a terminal with an inline-graphics protocol
 poster frame. On a terminal with no graphics protocol it shows just the file-info placeholder. Set
 it to `false` to disable the feature entirely — media files then show the plain `[binary file]`
 placeholder. See [inline image & video preview](renderers.md#inline-image--video-preview).
+
+`heading_banners` styles headings in the **rendered markdown** view. When on (the default), an H1
+gets a strong full-width filled accent bar and an H2 a fainter one (the leading `##` marker hidden),
+giving a clear visual size hierarchy; H3–H6 keep glow's plain bold styling. This is a *fake* size
+hierarchy: genuine larger glyphs need a terminal that renders the kitty **text-sizing protocol**
+(OSC 66), which Ghostty currently parses but does not yet render, so the bars stand in for real
+scaling. Set it to `false` to keep glow's plain bold headings.
 
 `obsidian_editor` decides what `e` does for a markdown note that lives inside an **Obsidian vault**
 — a directory whose ancestor contains a `.obsidian/` folder. When on (the default), pressing `e` on

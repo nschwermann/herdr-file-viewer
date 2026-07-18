@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries are short on purpose; follow the
 `→` links for the full detail.
 
+## [Unreleased]
+
+### Added
+- **Heading banners** in the rendered markdown view: an H1 now renders as a strong full-width filled accent bar and an H2 as a fainter one (the `##` marker hidden), giving headings a clear visual size hierarchy; H3–H6 keep glow's plain bold styling. A stand-in for true font scaling, which needs the kitty text-sizing protocol (OSC 66) — Ghostty parses but does not yet render it. Toggle with `heading_banners = false`. → [configuration](docs/configuration.md)
+
 ## [2.0.0] - 2026-07-17
 
 This is the first release of the **`nschwermann` fork** (the Obsidian media & vault suite). The

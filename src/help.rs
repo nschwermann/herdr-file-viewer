@@ -260,6 +260,7 @@ pub fn settings_text(
     let reveal = opener_row(&eff.reveal, &wired.reveal);
     let update_check = if eff.update_check { "on" } else { "off" };
     let confirm_discard = if eff.confirm_discard { "on" } else { "off" };
+    let heading_banners = if eff.heading_banners { "on" } else { "off" };
 
     // Keys are padded to the widest name (`preview_max_lines`, 17) so the `=` column lines up.
     format!(
@@ -271,6 +272,7 @@ pub fn settings_text(
          hide_dotfiles     = {hide_dotfiles}\n\
          update_check      = {update_check}\n\
          confirm_discard   = {confirm_discard}\n\
+         heading_banners   = {heading_banners}\n\
          scroll_lines      = {scroll_lines}\n\
          tree_width        = {tree_width}\n\
          tree_position     = {tree_position}\n\
@@ -282,6 +284,7 @@ pub fn settings_text(
         hide_dotfiles = eff.hide_dotfiles,
         update_check = update_check,
         confirm_discard = confirm_discard,
+        heading_banners = heading_banners,
         scroll_lines = eff.scroll_lines,
         tree_width = eff.tree_width,
         tree_position = eff.tree_position.label(),
@@ -777,6 +780,7 @@ mod tests {
             hide_dotfiles: true,
             update_check: false,
             media_preview: true,
+            heading_banners: true,
             obsidian_editor: true,
             confirm_discard: false,
             scroll_lines: 7,

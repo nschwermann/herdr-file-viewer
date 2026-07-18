@@ -126,6 +126,11 @@ pub struct Config {
     /// falls back to `true`. When `false`, media files show the plain `[binary file]` placeholder
     /// and `Enter` just zooms.
     pub media_preview: Option<bool>,
+    /// Whether rendered markdown gives H1/H2 headings a full-width "banner" (a filled accent bar,
+    /// blanked `##` marker) to fake a size hierarchy — true terminal font scaling needs the kitty
+    /// text-sizing protocol (OSC 66), which Ghostty parses but does not yet render. `None` falls back
+    /// to `true`. When `false`, headings keep glow's plain bold styling. Rendered-markdown view only.
+    pub heading_banners: Option<bool>,
     /// Whether the `e` key opens a markdown file that lives inside an Obsidian vault in Obsidian
     /// (via the `obsidian://open` URI) instead of the configured editor. `None` falls back to
     /// `true`. Only affects `.md` files under a directory whose ancestor holds a `.obsidian/`
@@ -286,6 +291,9 @@ pub struct EffectiveSettings {
     /// The effective **media-preview** switch: the config `media_preview` when present, else
     /// `true`. Config-or-default (no env var).
     pub media_preview: bool,
+    /// The effective **heading-banners** switch: the config `heading_banners` when present, else
+    /// `true`. Config-or-default (no env var).
+    pub heading_banners: bool,
     /// The effective **open-vault-markdown-in-Obsidian** switch: the config `obsidian_editor` when
     /// present, else `true`. Config-or-default (no env var).
     pub obsidian_editor: bool,
@@ -376,6 +384,10 @@ pub fn resolve(config: &Config, get_env: impl Fn(&str) -> Option<String>) -> Eff
     // preview when the terminal is capable.
     let media_preview = config.media_preview.unwrap_or(true);
 
+    // Config > default; no env var. Defaults ON: H1/H2 headings get the banner treatment (a size
+    // hierarchy the terminal can't give us via true font scaling).
+    let heading_banners = config.heading_banners.unwrap_or(true);
+
     // Config > default; no env var. Defaults ON: a vault `.md` opens in Obsidian, every other file
     // still uses the editor hand-off.
     let obsidian_editor = config.obsidian_editor.unwrap_or(true);
@@ -456,6 +468,7 @@ pub fn resolve(config: &Config, get_env: impl Fn(&str) -> Option<String>) -> Eff
         hide_dotfiles,
         update_check,
         media_preview,
+        heading_banners,
         obsidian_editor,
         confirm_discard,
         scroll_lines,

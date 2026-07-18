@@ -88,6 +88,10 @@ pub fn run() -> io::Result<()> {
     let inline_media = media_preview && media_cap.protocol.is_some();
     let video_poster = media_cap.video_tool.is_some();
 
+    // The heading-banner switch (config `heading_banners`): a pure post-render styling choice, so a
+    // plain `bool` captured by value into the factory closure like the other feature flags.
+    let heading_banners = eff.heading_banners;
+
     // The shared frontmatter-Properties-panel flag (the `p` toggle). Shown by default (like
     // Obsidian). The live Content Renderer reads it on the worker thread when rendering markdown;
     // the controller flips it and re-renders. One clone goes into the render factory, one to the
@@ -116,6 +120,7 @@ pub fn run() -> io::Result<()> {
                 caps,
                 media_preview,
                 inline_media,
+                heading_banners,
                 video_poster,
                 show_properties: Arc::clone(&factory_properties),
             });
@@ -621,6 +626,9 @@ struct LiveContent {
     /// Whether an inline image will actually paint (a graphics protocol is available). Controls the
     /// placeholder wording: metadata-only when the image renders below, else an info-only notice.
     inline_media: bool,
+    /// Whether rendered markdown gives H1/H2 headings the full-width banner treatment (config
+    /// `heading_banners`). Passed to the `mdstyle` post-render pass. `Copy`.
+    heading_banners: bool,
     /// Whether a video poster tool (ffmpeg/ffmpegthumbnailer) is on `PATH`, so a *video* can show a
     /// frame. Feeds the placeholder's "install ffmpeg" notice when absent.
     video_poster: bool,
@@ -779,7 +787,11 @@ impl ContentProvider for LiveContent {
         // titled, tinted boxes. Never touches the source view or diffs. The pre-glow markdown (the
         // sentinel-injected `prepared` text) tells it which wikilinks are real (not inside code).
         let content = if mode == ViewMode::RenderedMarkdown {
-            crate::mdstyle::style_rendered_markdown(content, prepared_text(&prepared))
+            crate::mdstyle::style_rendered_markdown(
+                content,
+                prepared_text(&prepared),
+                self.heading_banners,
+            )
         } else {
             content
         };
@@ -1957,6 +1969,7 @@ mod tests {
             },
             caps: Caps::default(),
             media_preview: false,
+            heading_banners: false,
             inline_media: false,
             video_poster: false,
             show_properties: Arc::new(AtomicBool::new(true)),
@@ -1987,6 +2000,7 @@ mod tests {
                 max_bytes: 1024 * 1024,
             },
             media_preview: false,
+            heading_banners: false,
             inline_media: false,
             video_poster: false,
             show_properties: Arc::new(AtomicBool::new(true)),
@@ -2020,6 +2034,7 @@ mod tests {
             renderers: default_renderers(),
             caps: Caps::default(),
             media_preview: true,
+            heading_banners: true,
             inline_media: false, // no graphics protocol → info-only placeholder
             video_poster: false,
             show_properties: Arc::new(AtomicBool::new(true)),
@@ -2050,6 +2065,7 @@ mod tests {
             renderers: default_renderers(),
             caps: Caps::default(),
             media_preview: false,
+            heading_banners: false,
             inline_media: false,
             video_poster: false,
             show_properties: Arc::new(AtomicBool::new(true)),
@@ -2097,6 +2113,7 @@ mod tests {
             renderers: default_renderers(),
             caps: Caps::default(),
             media_preview: true,
+            heading_banners: true,
             inline_media: true, // a graphics terminal — embeds are reserved
             video_poster: false,
             show_properties: Arc::new(AtomicBool::new(true)),
@@ -2149,6 +2166,7 @@ mod tests {
             renderers: default_renderers(),
             caps: Caps::default(),
             media_preview: true,
+            heading_banners: true,
             inline_media: false,
             video_poster: false,
             show_properties: Arc::new(AtomicBool::new(true)),
@@ -2192,6 +2210,7 @@ mod tests {
             },
             caps: Caps::default(),
             media_preview: false,
+            heading_banners: false,
             inline_media: false,
             video_poster: false,
             show_properties: Arc::new(AtomicBool::new(true)),
@@ -2280,6 +2299,7 @@ mod tests {
             },
             caps: Caps::default(),
             media_preview: false,
+            heading_banners: false,
             inline_media: false,
             video_poster: false,
             show_properties: flag.clone(),

@@ -25,6 +25,7 @@
 //! Pure: allocates a new `Text`; never mutates the input. Zero new Cargo deps (ratatui + std).
 
 use std::borrow::Cow;
+use std::collections::HashSet;
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -38,6 +39,22 @@ const LINK_FG: Color = Color::Rgb(183, 148, 244);
 
 /// The style patched onto a link run: the link colour plus an underline cue.
 const LINK_STYLE: Style = Style::new().fg(LINK_FG).add_modifier(Modifier::UNDERLINED);
+
+// ── heading banners ───────────────────────────────────────────────────────────
+//
+// Genuine larger glyphs need a terminal that renders the kitty text-sizing protocol (OSC 66);
+// Ghostty 1.3.x parses but does not render it, so there is no true font scaling to lean on. Instead
+// this pass fakes a size *hierarchy* with two tiers of full-width filled bars — a strong bar for H1,
+// a fainter one for H2 — reusing the same "glow pads every line to the pane width" trick the callout
+// tinting relies on. H3-H6 keep glow's own bold styling unchanged (the "rest normal" tier).
+
+/// H1 banner: a deep filled bar with light, bold text — the strongest visual weight.
+const H1_BG: Color = Color::Rgb(74, 58, 120);
+const H1_FG: Color = Color::Rgb(236, 232, 250);
+
+/// H2 banner: a fainter filled bar with bright-purple bold text — clearly a step below H1.
+const H2_BG: Color = Color::Rgb(42, 36, 60);
+const H2_FG: Color = Color::Rgb(198, 168, 246);
 
 // ── callout accents ─────────────────────────────────────────────────────────
 
@@ -127,8 +144,20 @@ enum CalloutLine {
 /// Returns a new `Text`; the input is consumed and never mutated. Callout tinting is a small state
 /// machine over the lines (a header opens a block; blockquote continuation lines stay in it; any
 /// other line closes it), so a plain blockquote — one with no icon+LABEL header — is never tinted.
-pub fn style_rendered_markdown(text: Text<'static>, markdown_source: &str) -> Text<'static> {
+pub fn style_rendered_markdown(
+    text: Text<'static>,
+    markdown_source: &str,
+    heading_banners: bool,
+) -> Text<'static> {
     let markups = wiki_markups(markdown_source);
+    // glow strips the leading `#` from an H1 (H2-H6 keep their literal `## ` marker), so the rendered
+    // H1 line carries no level signal — recover it by matching the line's text against the source's
+    // H1 titles. Computed once; empty (and cheap) when banners are off.
+    let h1s = if heading_banners {
+        h1_titles(markdown_source)
+    } else {
+        HashSet::new()
+    };
     let mut out: Vec<Line<'static>> = Vec::with_capacity(text.lines.len());
     let mut open: Option<Accent> = None; // the accent of the callout currently open, if any
 
@@ -145,7 +174,15 @@ pub fn style_rendered_markdown(text: Text<'static>, markdown_source: &str) -> Te
             },
             CalloutLine::Other => {
                 open = None;
-                line
+                // A heading is never a blockquote line, so it only ever lands here. Banner it when
+                // enabled; otherwise (and for ordinary body lines) pass through untouched.
+                match heading_banners
+                    .then(|| heading_level(&plain, &h1s, &line))
+                    .flatten()
+                {
+                    Some(level) => style_heading(line, level),
+                    None => line,
+                }
             }
         };
         out.push(style_links(line, &markups));
@@ -214,6 +251,103 @@ fn tint_callout(line: Line<'static>, accent: Accent, is_header: bool) -> Line<'s
             Span {
                 content: s.content,
                 style,
+            }
+        })
+        .collect();
+    Line {
+        spans,
+        style: line.style.bg(bg),
+        alignment: line.alignment,
+    }
+}
+
+// ── heading detection + banners ───────────────────────────────────────────────
+
+/// The set of the source's H1 titles (the text after a single `# `), used to recognise a rendered
+/// H1 line — glow drops its `#`, so the marker is gone by render time. Fence-aware: a `# ` inside a
+/// ``` / ~~~ fenced code block is verbatim text, not a heading, and is skipped. Trimmed titles.
+fn h1_titles(source: &str) -> HashSet<String> {
+    let mut set = HashSet::new();
+    let mut in_fence = false;
+    for line in source.lines() {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        // `# ` matches a single hash + space only: `## Title` starts with `##`, not `# `.
+        if let Some(rest) = t.strip_prefix("# ") {
+            let title = rest.trim();
+            if !title.is_empty() {
+                set.insert(title.to_owned());
+            }
+        }
+    }
+    set
+}
+
+/// The heading level (1-6) of a rendered line, or `None` if it is not a heading. H2-H6 keep glow's
+/// literal `## `…`###### ` marker, so the level is read straight off the leading run of `#`. An H1
+/// (marker stripped) is recognised only when the line is **bold** (glow renders every heading bold)
+/// *and* its trimmed text matches a known source H1 title — the bold gate keeps an ordinary body
+/// line that happens to repeat a title's text from being mistaken for a banner.
+fn heading_level(plain: &str, h1_titles: &HashSet<String>, line: &Line<'static>) -> Option<u8> {
+    let t = plain.trim();
+    if t.starts_with("##") {
+        let hashes = t.chars().take_while(|&c| c == '#').count();
+        if (2..=6).contains(&hashes) && t[hashes..].starts_with(' ') {
+            return Some(hashes as u8);
+        }
+    }
+    if !t.is_empty() && line_is_bold(line) && h1_titles.contains(t) {
+        return Some(1);
+    }
+    None
+}
+
+/// Whether any span on the line carries the bold modifier (glow's heading signal).
+fn line_is_bold(line: &Line<'static>) -> bool {
+    line.spans
+        .iter()
+        .any(|s| s.style.add_modifier.contains(Modifier::BOLD))
+}
+
+/// Replace a leading run of `#` characters with the same number of spaces, hiding an H2-H6's literal
+/// marker while keeping the line's width (so the filled bar and any column alignment are unchanged).
+fn blank_leading_hashes(content: &str) -> Cow<'static, str> {
+    let hashes = content.chars().take_while(|&c| c == '#').count();
+    if hashes == 0 {
+        return Cow::Owned(content.to_owned());
+    }
+    let mut out = " ".repeat(hashes);
+    out.push_str(&content[hashes..]);
+    Cow::Owned(out)
+}
+
+/// Paint a heading line as a full-width filled banner: H1 gets the strong bar, H2 the fainter one,
+/// both with bold accent text (the marker blanked for H2). H3-H6 are left as glow rendered them.
+/// The background is set on every span and on the line itself so glow's width padding fills the bar.
+fn style_heading(line: Line<'static>, level: u8) -> Line<'static> {
+    let (bg, fg) = match level {
+        1 => (H1_BG, H1_FG),
+        2 => (H2_BG, H2_FG),
+        _ => return line, // H3-H6: keep glow's default bold styling
+    };
+    let spans = line
+        .spans
+        .into_iter()
+        .map(|s| {
+            let content = if level >= 2 {
+                blank_leading_hashes(&s.content)
+            } else {
+                s.content
+            };
+            Span {
+                content,
+                style: s.style.bg(bg).fg(fg).add_modifier(Modifier::BOLD),
             }
         })
         .collect();
@@ -470,6 +604,82 @@ mod tests {
         assert_eq!(got, vec!["![[Emb]]".to_string(), "[[Real]]".to_string()]);
     }
 
+    // ── headings ────────────────────────────────────────────────────────────
+
+    fn bold(s: &str) -> Line<'static> {
+        line(&[(s, Style::default().add_modifier(Modifier::BOLD))])
+    }
+
+    #[test]
+    fn h2_heading_is_barred_and_marker_blanked() {
+        // glow keeps the literal `## ` marker (its own span) and renders the line bold.
+        let text = Text::from(vec![line(&[
+            ("  ", Style::default()),
+            ("## ", Style::default().add_modifier(Modifier::BOLD)),
+            ("Section", Style::default().add_modifier(Modifier::BOLD)),
+            ("   ", Style::default()), // glow's width padding
+        ])]);
+        let out = style_rendered_markdown(text, "", true);
+        let l = &out.lines[0];
+        // Full-width fill: every span carries the H2 bar background.
+        assert!(l.spans.iter().all(|s| s.style.bg == Some(H2_BG)));
+        // The `## ` marker is blanked to spaces (hashes gone), width preserved.
+        let plain: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(!plain.contains('#'), "marker hashes hidden: {plain:?}");
+        assert!(plain.contains("Section"));
+        assert_eq!(plain.chars().count(), "  ## Section   ".chars().count());
+    }
+
+    #[test]
+    fn h1_heading_is_matched_via_source_title_and_barred() {
+        // glow strips the `#`, pads the text — recognised by the source H1 title + bold.
+        let text = Text::from(vec![bold(" My Title ")]);
+        let out = style_rendered_markdown(text, "# My Title\n\nbody", true);
+        assert!(out.lines[0].spans.iter().all(|s| s.style.bg == Some(H1_BG)));
+        assert_eq!(out.lines[0].spans[0].style.fg, Some(H1_FG));
+    }
+
+    #[test]
+    fn body_text_matching_a_title_but_not_bold_is_not_barred() {
+        // The bold gate: an ordinary (non-bold) line repeating a title's text is left alone.
+        let text = Text::from(vec![line(&[("My Title", Style::default())])]);
+        let out = style_rendered_markdown(text, "# My Title", true);
+        assert!(out.lines[0].spans.iter().all(|s| s.style.bg.is_none()));
+    }
+
+    #[test]
+    fn h3_and_deeper_are_left_as_glow_rendered() {
+        let text = Text::from(vec![line(&[
+            ("  ", Style::default()),
+            ("### ", Style::default().add_modifier(Modifier::BOLD)),
+            ("Sub", Style::default().add_modifier(Modifier::BOLD)),
+        ])]);
+        let out = style_rendered_markdown(text, "", true);
+        assert!(out.lines[0].spans.iter().all(|s| s.style.bg.is_none()));
+        let plain: String = out.lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(plain.contains("### "), "H3 marker preserved: {plain:?}");
+    }
+
+    #[test]
+    fn heading_banners_off_leaves_headings_untouched() {
+        let text = Text::from(vec![bold(" My Title ")]);
+        let out = style_rendered_markdown(text, "# My Title", false);
+        assert!(out.lines[0].spans.iter().all(|s| s.style.bg.is_none()));
+    }
+
+    #[test]
+    fn h1_titles_skips_fenced_code_and_deeper_headings() {
+        let src = "# Real\n\n## Nested\n\n```\n# Fenced\n```\n";
+        let got = h1_titles(src);
+        assert!(got.contains("Real"));
+        assert!(!got.contains("Nested"), "## is not H1");
+        assert!(!got.contains("Fenced"), "fenced # is code, not a heading");
+    }
+
     // ── callouts ────────────────────────────────────────────────────────────
 
     /// A glow-rendered blockquote line: 2-space margin, `│ ` border, then content, then padding.
@@ -519,7 +729,7 @@ mod tests {
             line(&[("", Style::default())]), // blank line ends the block
             glow_blockquote("a plain quote"),
         ]);
-        let out = style_rendered_markdown(text, "");
+        let out = style_rendered_markdown(text, "", true);
         let bg = Accent::Blue.bg();
 
         // Header + body line carry the tint on every span.
@@ -551,7 +761,7 @@ mod tests {
             glow_blockquote("★ TIP"),
             glow_blockquote("stay hydrated"),
         ]);
-        let out = style_rendered_markdown(text, "");
+        let out = style_rendered_markdown(text, "", true);
         let body = &out.lines[1];
         let border = body
             .spans

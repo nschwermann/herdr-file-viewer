@@ -9604,6 +9604,7 @@ fn open_help_appends_settings_section_when_display_is_set() {
         hide_dotfiles: false,
         update_check: true,
         media_preview: true,
+        heading_banners: true,
         obsidian_editor: true,
         confirm_discard: true,
         scroll_lines: 3,

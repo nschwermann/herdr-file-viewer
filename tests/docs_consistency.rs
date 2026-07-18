@@ -49,6 +49,7 @@ fn config_example_documents_every_config_key() {
         "hide_dotfiles",
         "update_check",
         "media_preview",
+        "heading_banners",
         "obsidian_editor",
         "confirm_discard",
         "scroll_lines",

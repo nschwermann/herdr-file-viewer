@@ -224,6 +224,12 @@ apply to any markdown note; the source view (cycle to it with `v`) always shows 
   up`), and a foldable marker (`> [!note]-` / `+`) shows a `▸` / `▾` indicator. Unknown types fall
   back to the note (blue) accent. The tint is tuned for a dark theme (the same one `glow` renders
   with).
+- **Heading banners.** An H1 renders as a strong full-width **filled accent bar** and an H2 as a
+  fainter one (the leading `##` marker hidden), so headings carry a clear visual **size hierarchy**;
+  H3–H6 keep `glow`'s plain bold styling. This is a stand-in for real font scaling — genuinely larger
+  glyphs need a terminal that renders the kitty **text-sizing protocol** (OSC 66), which Ghostty
+  currently parses but does not yet render. Turn it off with `heading_banners = false` (see
+  [configuration](configuration.md)) to keep `glow`'s plain bold headings.
 - **Highlighted links.** `[[wikilinks]]`, aliased `[[target|links]]`, note `![[embeds]]`, and
   standard `[text](target)` links render in a distinct **underlined link colour** (an Obsidian-like
   purple) so they stand out from body text, instead of `glow`'s plain body colour. The wikilink
