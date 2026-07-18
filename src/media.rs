@@ -1,14 +1,15 @@
 //! Media rendering — capability-gated inline preview of images and video.
 //!
-//! A sibling to the external content renderers (glow/delta/bat): an **image renderer** that
-//! activates only when the terminal supports an inline-graphics protocol AND a capable CLI
-//! backend is on `PATH`. Detection is cheap and cached ([`detect`]). When both are present, the
-//! content pane advertises an inline preview the user can paint over a suspended terminal (the
-//! same suspend/resume hand-off the editor uses, so no graphics escape ever reaches the ratatui
-//! frame buffer — the constitution's "never emit escape garbage to an incapable terminal").
-//! When either is missing, it falls back to a clean textual placeholder: file type, dimensions
-//! (cheaply parsed from the header when possible), and size. It never crashes and never emits raw
-//! bytes.
+//! A sibling to the external content renderers (glow/delta/bat): the content pane draws images
+//! and video poster frames **inline in the ratatui frame** via the terminal's graphics protocol
+//! (kitty/sixel/iterm2), driven by the `ratatui-image` crate (see `app::MediaPane`). This module
+//! owns the read-only, testable *decisions* around that: classify a path, parse image dimensions
+//! cheaply from the header, detect the terminal's graphics protocol and the video poster tool
+//! from the environment/`PATH`, build the poster-extraction argv, and format the metadata
+//! placeholder the pane shows above the image (or alone, when no graphics protocol is available).
+//!
+//! Detection is cheap and cached ([`detect`]). The actual pixels are painted by the app layer,
+//! which owns the terminal and the `ratatui-image` picker; this module never emits escape bytes.
 //!
 //! Everything here is **read-only** (constitution §1): it classifies by extension, parses image
 //! headers (a bounded read), probes the environment/`PATH`, and builds argv — it never writes a
@@ -39,50 +40,6 @@ impl GraphicsProtocol {
     }
 }
 
-/// An inline-image CLI backend, in the detection priority order the task specifies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImageBackend {
-    /// `kitten icat` — kitty's own image displayer.
-    KittenIcat,
-    /// `chafa` — auto-detects the terminal's protocol (kitty/sixel/iterm2) and degrades to
-    /// Unicode symbols. The recommended default.
-    Chafa,
-    /// `timg` — terminal image/video viewer.
-    Timg,
-    /// `viu` — a simple terminal image viewer.
-    Viu,
-}
-
-impl ImageBackend {
-    /// The program name to probe on `PATH` (the launcher binary).
-    pub fn program(self) -> &'static str {
-        match self {
-            ImageBackend::KittenIcat => "kitten",
-            ImageBackend::Chafa => "chafa",
-            ImageBackend::Timg => "timg",
-            ImageBackend::Viu => "viu",
-        }
-    }
-
-    /// A short human label for the placeholder's capability line.
-    pub fn label(self) -> &'static str {
-        match self {
-            ImageBackend::KittenIcat => "kitten icat",
-            ImageBackend::Chafa => "chafa",
-            ImageBackend::Timg => "timg",
-            ImageBackend::Viu => "viu",
-        }
-    }
-
-    /// The detection priority list (first available wins).
-    pub const PRIORITY: [ImageBackend; 4] = [
-        ImageBackend::KittenIcat,
-        ImageBackend::Chafa,
-        ImageBackend::Timg,
-        ImageBackend::Viu,
-    ];
-}
-
 /// A tool for extracting a representative poster frame from a video, in priority order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoTool {
@@ -99,6 +56,17 @@ impl VideoTool {
             VideoTool::Ffmpeg => "ffmpeg",
         }
     }
+}
+
+/// The inline-media descriptor the controller hands the app each tick: which media file is on
+/// display, its class, and how many metadata rows sit above the inline image. The app's
+/// `MediaPane` loads/evicts the image protocol keyed on `path`, and places the image in the
+/// content pane's rows below `header_rows`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineMedia {
+    pub path: PathBuf,
+    pub kind: MediaKind,
+    pub header_rows: u16,
 }
 
 /// Which media class a file is, by extension.
@@ -172,14 +140,6 @@ pub fn detect_protocol(get: impl Fn(&str) -> Option<String>) -> Option<GraphicsP
     None
 }
 
-/// Select the first available image backend from [`ImageBackend::PRIORITY`], via an **injected**
-/// availability predicate (`have(program)` — true when the program is on `PATH`).
-pub fn detect_image_backend(have: impl Fn(&str) -> bool) -> Option<ImageBackend> {
-    ImageBackend::PRIORITY
-        .into_iter()
-        .find(|b| have(b.program()))
-}
-
 /// Select the video poster tool (ffmpegthumbnailer preferred, else ffmpeg), via `have`.
 pub fn detect_video_tool(have: impl Fn(&str) -> bool) -> Option<VideoTool> {
     if have("ffmpegthumbnailer") {
@@ -191,12 +151,16 @@ pub fn detect_video_tool(have: impl Fn(&str) -> bool) -> Option<VideoTool> {
     }
 }
 
-/// The resolved media capability for this session: the terminal protocol, the image backend, and
-/// the video poster tool (each `None` when unavailable). `Copy` — three small enums.
+/// The resolved media capability for this session: the terminal's (env-detected) graphics
+/// protocol and the video poster tool (each `None` when unavailable). `Copy` — two small enums.
+///
+/// The env-detected `protocol` is an *advisory* hint used to enable the feature and to upgrade the
+/// `ratatui-image` picker's protocol when its own terminal query comes up empty; the picker's live
+/// query is authoritative for what actually paints. `video_tool` gates whether a video can show a
+/// poster frame at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MediaCapability {
     pub protocol: Option<GraphicsProtocol>,
-    pub image_backend: Option<ImageBackend>,
     pub video_tool: Option<VideoTool>,
 }
 
@@ -205,14 +169,14 @@ impl MediaCapability {
     pub fn resolve(get_env: impl Fn(&str) -> Option<String>, have: impl Fn(&str) -> bool) -> Self {
         MediaCapability {
             protocol: detect_protocol(get_env),
-            image_backend: detect_image_backend(&have),
             video_tool: detect_video_tool(&have),
         }
     }
 
-    /// Whether an inline **image** can be painted: a protocol AND an image backend are present.
+    /// Whether an inline **image** can be painted: a graphics protocol is available. The image
+    /// pixels are encoded by `ratatui-image`, so no external CLI backend is required.
     pub fn can_show_image(&self) -> bool {
-        self.protocol.is_some() && self.image_backend.is_some()
+        self.protocol.is_some()
     }
 
     /// Whether an inline **video** poster can be shown: image display is possible AND a poster
@@ -396,17 +360,23 @@ pub fn human_size(bytes: u64) -> String {
     format!("{v:.1} {}", UNITS[u])
 }
 
-/// Build the content-pane **placeholder** for a media file: an icon + the file type, its
-/// dimensions (when cheaply parsed), its on-disk size, and a capability line telling the user
-/// whether an inline preview is available (and how) or what is missing. This is what the pane
-/// always shows for media; it is plain text, so it can never emit escape garbage. Pure over its
-/// inputs.
+/// Build the content-pane **metadata header** for a media file: an icon + the file type, its
+/// dimensions (when cheaply parsed), and its on-disk size. When the image itself renders inline
+/// below (auto-displayed by the app's `MediaPane`), this is just that metadata plus a trailing
+/// blank spacer row — the returned line count is used as the header height above the image. When
+/// no graphics protocol is available (`inline == false`), or a video has no poster tool, a
+/// closing notice explains that only file info is shown. Plain text, so it can never emit escape
+/// garbage. Pure over its inputs.
+///
+/// - `inline`: a terminal graphics protocol is available, so the image will paint below.
+/// - `video_poster`: a poster-extraction tool (ffmpeg/ffmpegthumbnailer) is on `PATH`.
 pub fn placeholder(
     kind: MediaKind,
     file_name: &str,
     size: Option<u64>,
     dimensions: Option<(u32, u32)>,
-    cap: &MediaCapability,
+    inline: bool,
+    video_poster: bool,
 ) -> String {
     // No emoji in the header: some terminals render image/video emoji double-width while
     // unicode-width reports single, which would misalign the pane by a cell. A plain label is safe.
@@ -418,78 +388,25 @@ pub fn placeholder(
     if let Some(bytes) = size {
         lines.push(format!("File:  {}", human_size(bytes)));
     }
+    // A blank spacer: either the gap above the inline image, or before a notice.
     lines.push(String::new());
 
-    if cap.can_show(kind) {
-        let backend = cap.image_backend.map(|b| b.label()).unwrap_or("?");
-        let protocol = cap.protocol.map(|p| p.label()).unwrap_or("?");
-        lines.push(format!(
-            "Inline preview available ({protocol} via {backend}) — press Enter to view.",
-        ));
-    } else if cap.protocol.is_none() {
-        lines.push(
-            "No inline-graphics protocol detected in this terminal — showing file info only."
-                .to_string(),
-        );
-    } else if kind == MediaKind::Video && cap.video_tool.is_none() {
-        lines.push(
-            "No video poster tool (install ffmpeg or ffmpegthumbnailer) — showing file info only."
-                .to_string(),
-        );
-    } else {
-        lines.push(
-            "No inline image backend (install chafa, kitten, timg, or viu) — showing file info \
-             only."
-                .to_string(),
-        );
+    // Whether the image/poster actually paints below.
+    let shows_inline = inline && (kind == MediaKind::Image || video_poster);
+    if !shows_inline {
+        if !inline {
+            lines
+                .push("No inline-graphics terminal detected — showing file info only.".to_string());
+        } else {
+            // inline-capable terminal, but a video with no poster tool.
+            lines.push(
+                "No video poster tool (install ffmpeg or ffmpegthumbnailer) — showing file info \
+                 only."
+                    .to_string(),
+            );
+        }
     }
     lines.join("\n")
-}
-
-/// Build the argv that paints `image` inline via `backend`, sized to `cols` × `rows` character
-/// cells. `protocol` steers chafa's format; the other backends auto-detect. The image path is
-/// always the final, single argv element (never shell-split), so spaces/metacharacters stay
-/// literal.
-pub fn image_argv(
-    backend: ImageBackend,
-    protocol: GraphicsProtocol,
-    image: &Path,
-    cols: u16,
-    rows: u16,
-) -> Vec<String> {
-    let path = image.to_string_lossy().into_owned();
-    match backend {
-        ImageBackend::KittenIcat => vec![
-            "kitten".into(),
-            "icat".into(),
-            "--clear".into(),
-            "--place".into(),
-            format!("{cols}x{rows}@0x0"),
-            path,
-        ],
-        ImageBackend::Chafa => {
-            let format = match protocol {
-                GraphicsProtocol::Kitty => "kitty",
-                GraphicsProtocol::Iterm2 => "iterm",
-                GraphicsProtocol::Sixel => "sixels",
-            };
-            vec![
-                "chafa".into(),
-                format!("--format={format}"),
-                format!("--size={cols}x{rows}"),
-                path,
-            ]
-        }
-        ImageBackend::Timg => vec!["timg".into(), format!("-g{cols}x{rows}"), path],
-        ImageBackend::Viu => vec![
-            "viu".into(),
-            "-w".into(),
-            cols.to_string(),
-            "-h".into(),
-            rows.to_string(),
-            path,
-        ],
-    }
 }
 
 /// Build the argv that extracts a poster frame from `video` into `out` (a temp image). For
@@ -534,25 +451,6 @@ pub fn video_poster_argv(
             ]
         }
     }
-}
-
-/// The read-only media-preview seam: paint a media file over a suspended terminal. Behind a trait
-/// so the controller stays unit-testable (the live implementation, in `app.rs`, suspends the TUI,
-/// runs the backend, waits for a keypress, and resumes). Never mutates the previewed file.
-pub trait MediaViewer {
-    /// Preview `path` (an image or video). Returns the outcome; the live viewer takes over the
-    /// terminal and returns [`MediaOutcome::TookOver`].
-    fn view(&mut self, path: &Path, kind: MediaKind) -> MediaOutcome;
-}
-
-/// The result of a media-preview attempt (mirrors the editor hand-off's outcomes).
-#[derive(Debug, PartialEq, Eq)]
-pub enum MediaOutcome {
-    /// The preview ran and drew over the terminal; the run loop forces a full repaint.
-    TookOver,
-    /// The preview could not run (backend missing / capability absent). Carries a user-facing
-    /// reason for the notice.
-    Failed(String),
 }
 
 /// A scratch path for a video poster frame, under the system temp dir, unique to `video`'s name
@@ -621,21 +519,6 @@ mod tests {
     }
 
     #[test]
-    fn image_backend_priority_prefers_kitten_then_chafa() {
-        // Only chafa + viu present → chafa (higher priority than viu).
-        let have = |p: &str| matches!(p, "chafa" | "viu");
-        assert_eq!(detect_image_backend(have), Some(ImageBackend::Chafa));
-        // kitten present → wins over everything.
-        let have_all = |_: &str| true;
-        assert_eq!(
-            detect_image_backend(have_all),
-            Some(ImageBackend::KittenIcat)
-        );
-        // none present → None.
-        assert_eq!(detect_image_backend(|_| false), None);
-    }
-
-    #[test]
     fn video_tool_prefers_thumbnailer_then_ffmpeg() {
         assert_eq!(
             detect_video_tool(|p| p == "ffmpeg"),
@@ -649,68 +532,79 @@ mod tests {
     }
 
     #[test]
-    fn capability_gating_requires_protocol_and_backend() {
-        // Ghostty (kitty) but NO backend installed — exactly this machine's state: cannot show.
+    fn capability_gating_needs_only_a_graphics_protocol() {
+        // Ghostty (kitty): an image can show inline — no external backend required (ratatui-image
+        // encodes the pixels). Video still needs a poster tool.
         let cap = MediaCapability::resolve(
             |k| (k == "TERM_PROGRAM").then(|| "ghostty".to_string()),
             |_| false,
         );
         assert_eq!(cap.protocol, Some(GraphicsProtocol::Kitty));
-        assert_eq!(cap.image_backend, None);
-        assert!(!cap.can_show_image(), "no backend → no inline image");
-        assert!(!cap.can_show_video());
-
-        // Protocol + chafa but no ffmpeg: image yes, video no.
-        let cap = MediaCapability::resolve(
-            |k| (k == "TERM_PROGRAM").then(|| "ghostty".to_string()),
-            |p| p == "chafa",
-        );
-        assert!(cap.can_show_image());
+        assert!(cap.can_show_image(), "a graphics protocol suffices");
         assert!(!cap.can_show_video(), "no poster tool → no video");
 
-        // Backend present but plain terminal (no protocol): cannot show.
+        // Protocol + ffmpeg: both image and video can show.
+        let cap = MediaCapability::resolve(
+            |k| (k == "TERM_PROGRAM").then(|| "ghostty".to_string()),
+            |p| p == "ffmpeg",
+        );
+        assert!(cap.can_show_image());
+        assert!(cap.can_show_video(), "protocol + poster tool → video");
+
+        // Plain terminal (no protocol): cannot show.
         let cap = MediaCapability::resolve(|_| None, |_| true);
         assert!(!cap.can_show_image(), "no protocol → no inline image");
     }
 
     #[test]
-    fn placeholder_degrades_cleanly_with_no_backend() {
-        // This machine's real situation: Ghostty protocol, no image backend. The placeholder must
-        // name the type/size and say info-only — never crash, never emit escapes.
-        let cap = MediaCapability {
-            protocol: Some(GraphicsProtocol::Kitty),
-            image_backend: None,
-            video_tool: Some(VideoTool::Ffmpeg),
-        };
+    fn placeholder_is_metadata_only_when_inline_capable() {
+        // Inline-capable image: the placeholder is just the metadata (type/size/dimensions) — the
+        // image itself paints below, so no "press Enter" / capability line, and no escape bytes.
         let text = placeholder(
             MediaKind::Image,
             "photo.png",
             Some(2048),
             Some((800, 600)),
-            &cap,
+            true,  // inline graphics available
+            false, // no video poster tool (irrelevant for an image)
         );
         assert!(text.contains("photo.png"));
         assert!(text.contains("image"));
         assert!(text.contains("800 × 600"));
         assert!(text.contains("2.0 KB"));
         assert!(
-            text.to_lowercase().contains("no inline image backend"),
-            "degraded notice names the missing backend: {text}"
+            !text.to_lowercase().contains("only"),
+            "no info-only notice when the image renders inline: {text}"
         );
-        // Never any escape byte.
         assert!(!text.contains('\u{1b}'));
     }
 
     #[test]
-    fn placeholder_advertises_preview_when_capable() {
-        let cap = MediaCapability {
-            protocol: Some(GraphicsProtocol::Kitty),
-            image_backend: Some(ImageBackend::Chafa),
-            video_tool: Some(VideoTool::Ffmpeg),
-        };
-        let text = placeholder(MediaKind::Image, "a.png", Some(10), None, &cap);
-        assert!(text.contains("Inline preview available"));
-        assert!(text.contains("kitty via chafa"));
+    fn placeholder_degrades_cleanly_without_a_graphics_terminal() {
+        // No graphics protocol: metadata plus an info-only notice.
+        let text = placeholder(
+            MediaKind::Image,
+            "photo.png",
+            Some(2048),
+            Some((800, 600)),
+            false,
+            false,
+        );
+        assert!(text.contains("photo.png"));
+        assert!(
+            text.to_lowercase().contains("file info only"),
+            "degraded notice explains info-only: {text}"
+        );
+        assert!(!text.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn placeholder_video_without_poster_tool_notes_ffmpeg() {
+        let text = placeholder(MediaKind::Video, "clip.mp4", Some(10), None, true, false);
+        assert!(
+            text.to_lowercase().contains("ffmpeg"),
+            "a video with no poster tool names ffmpeg: {text}"
+        );
     }
 
     #[test]
@@ -762,48 +656,6 @@ mod tests {
         assert_eq!(human_size(512), "512 B");
         assert_eq!(human_size(1536), "1.5 KB");
         assert_eq!(human_size(2 * 1024 * 1024), "2.0 MB");
-    }
-
-    #[test]
-    fn image_argv_chafa_sets_format_and_size_and_path_last() {
-        let argv = image_argv(
-            ImageBackend::Chafa,
-            GraphicsProtocol::Kitty,
-            Path::new("/a b/pic.png"),
-            80,
-            24,
-        );
-        assert_eq!(argv[0], "chafa");
-        assert!(argv.iter().any(|a| a == "--format=kitty"));
-        assert!(argv.iter().any(|a| a == "--size=80x24"));
-        assert_eq!(
-            argv.last().unwrap(),
-            "/a b/pic.png",
-            "path is one literal arg"
-        );
-    }
-
-    #[test]
-    fn image_argv_kitten_and_viu_shapes() {
-        let k = image_argv(
-            ImageBackend::KittenIcat,
-            GraphicsProtocol::Kitty,
-            Path::new("p.png"),
-            10,
-            5,
-        );
-        assert_eq!(&k[0..2], &["kitten".to_string(), "icat".to_string()]);
-        assert_eq!(k.last().unwrap(), "p.png");
-
-        let v = image_argv(
-            ImageBackend::Viu,
-            GraphicsProtocol::Sixel,
-            Path::new("p.png"),
-            10,
-            5,
-        );
-        assert_eq!(v[0], "viu");
-        assert_eq!(v.last().unwrap(), "p.png");
     }
 
     #[test]

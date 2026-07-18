@@ -8,7 +8,11 @@ dependencies (not Cargo dependencies) and each is **optional**:
 | Rendered markdown | [`glow`](https://github.com/charmbracelet/glow) | `brew install glow` / package manager |
 | Diffs | [`delta`](https://github.com/dandavison/delta) | `brew install git-delta` / `cargo install git-delta` |
 | Syntax-highlighted content | [`bat`](https://github.com/sharkdp/bat) | `brew install bat` / package manager |
-| Inline image/video preview | [`chafa`](https://hpjansson.org/chafa/) (recommended), or `kitten` / `timg` / `viu` | `brew install chafa` / package manager |
+| Inline **video** poster frame | [`ffmpeg`](https://ffmpeg.org/) (or `ffmpegthumbnailer`) | `brew install ffmpeg` / package manager |
+
+Inline **image** preview needs no external CLI — images are decoded and encoded in-process (via
+the bundled [`ratatui-image`](https://crates.io/crates/ratatui-image) library); only a
+graphics-capable terminal is required. `ffmpeg` is only for extracting a **video's** poster frame.
 
 Or install them all at once with the bundled helper (best-effort; detects brew/apt/dnf/pacman
 and falls back to `cargo install` for `delta` and `bat`; `glow` is written in Go, so the helper
@@ -31,26 +35,23 @@ content cannot inject a command or drive the terminal.
 
 ## Inline image & video preview
 
-Image and video files get a **capability-gated** preview. The content pane always shows a clean
-placeholder for a media file — its type, dimensions (for images, parsed cheaply from the header),
-and size — so you learn what it is without leaving the terminal. When two conditions are met, you
-can also preview the media **inline**:
+Image and video files render **inline in the content pane**, automatically — as soon as the file is
+highlighted in the tree, with **no keypress**. The image is drawn scaled-to-fit right in the pane
+(not over a suspended terminal), with the file's metadata (type, dimensions, size) shown above it.
+Press **`Enter`** (or `z`) to zoom the pane for a larger view, like any other file.
 
-1. **The terminal supports an inline-graphics protocol** — the kitty graphics protocol (Ghostty,
-   kitty, WezTerm, Konsole), iTerm2's inline images, or sixel. This is detected from the
-   environment; an unknown terminal is treated as incapable (so no escape sequences are ever sent
-   to a terminal that can't render them).
-2. **A backend CLI is installed** — the first of [`kitten`](https://sw.kovidgoyal.net/kitty/kittens/icat/)
-   (kitty), [`chafa`](https://hpjansson.org/chafa/), [`timg`](https://github.com/hzeller/timg), or
-   [`viu`](https://github.com/atanunq/viu) on `PATH` (in that priority). **`chafa` is recommended**
-   — it auto-detects the protocol and degrades to Unicode symbols on its own.
+This works when the terminal supports an **inline-graphics protocol** — the kitty graphics protocol
+(Ghostty, kitty, WezTerm, Konsole), iTerm2's inline images, or sixel — detected from the
+environment. The pixels are decoded and encoded **in-process** by the bundled
+[`ratatui-image`](https://crates.io/crates/ratatui-image) library, so **no external image CLI**
+(chafa/kitten/timg/viu) is needed. For a **video**, a poster frame is extracted with
+[`ffmpeg`](https://ffmpeg.org/) (or `ffmpegthumbnailer`) at ~10% of the duration, then rendered
+through the same inline image path.
 
-When both hold, the placeholder invites you to press **`Enter`** to view; the image (or, for a
-video, a poster frame extracted with [`ffmpeg`](https://ffmpeg.org/)/`ffmpegthumbnailer` at ~10% of
-the duration) is painted over the terminal, and any key returns you to the viewer. When either
-condition is missing — including **no backend installed** — the viewer simply shows the file-info
-placeholder and never crashes or emits raw escape bytes. Detection is cheap and cached. Turn the
-whole feature off with `media_preview = false` in [config](configuration.md).
+On a terminal with no graphics protocol — or a video with no `ffmpeg` — the pane simply shows the
+file-info placeholder (type/dimensions/size); it never crashes or emits raw escape bytes to a
+terminal that can't render them. Detection is cheap and cached. Turn the whole feature off with
+`media_preview = false` in [config](configuration.md).
 
 ### Bundled markdown palette
 

@@ -61,7 +61,7 @@ reveal = "nautilus"
 
 hide_dotfiles = false       # true to hide dotfiles at startup (the `.` key still toggles)
 obsidian_editor = true      # `e` opens a vault .md in Obsidian (false = always use the editor)
-media_preview = true        # image/video placeholder + inline Enter-to-preview (false to disable)
+media_preview = true        # auto-display images/videos inline in the content pane (false to disable)
 update_check = true         # false to disable the once-a-day update check
 confirm_discard = true      # false to discard annotations without confirming (on quit / worktree switch)
 scroll_lines = 3            # mouse-wheel step (content/search/help), a 1 to 10 scale: 1 slow · 3 medium · 6 fast · 10 max
@@ -96,12 +96,13 @@ One caveat for **diffs**: a diff is additionally bounded at ~4 MB by the git-cap
 of `preview_max_kib`. So raising `preview_max_kib` above ~4 MB widens how much *file content* is shown
 but not how much of a very large *diff* is (a diff past that bound is shown up to ~4 MB).
 
-`media_preview` controls the image/video preview. When on (the default), an image or video file
-shows a placeholder in the content pane naming its type, dimensions (for images, parsed from the
-header), and size; and on a terminal with an inline-graphics protocol **and** a backend on `PATH`
-(`chafa`/`kitten`/`timg`/`viu`), pressing `Enter` paints the media inline (a video via an `ffmpeg`
-poster frame). Set it to `false` to disable the feature entirely — media files then show the plain
-`[binary file]` placeholder. See [inline image & video preview](renderers.md#inline-image--video-preview).
+`media_preview` controls the image/video preview. When on (the default), selecting an image or
+video file **auto-displays it inline** in the content pane (scaled to fit, with its type,
+dimensions, and size shown above) on a terminal with an inline-graphics protocol
+(kitty/sixel/iterm2). Images are decoded in-process (no external CLI); a video uses an `ffmpeg`
+poster frame. On a terminal with no graphics protocol it shows just the file-info placeholder. Set
+it to `false` to disable the feature entirely — media files then show the plain `[binary file]`
+placeholder. See [inline image & video preview](renderers.md#inline-image--video-preview).
 
 `obsidian_editor` decides what `e` does for a markdown note that lives inside an **Obsidian vault**
 — a directory whose ancestor contains a `.obsidian/` folder. When on (the default), pressing `e` on

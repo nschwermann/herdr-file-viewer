@@ -15,10 +15,7 @@ use herdr_file_viewer::controller::{
 use herdr_file_viewer::git::{Baseline, Status};
 use herdr_file_viewer::herdr::HerdrCli;
 use herdr_file_viewer::intent::Intent;
-use herdr_file_viewer::media::{
-    GraphicsProtocol, ImageBackend, MediaCapability, MediaKind, MediaOutcome, MediaViewer,
-    VideoTool,
-};
+use herdr_file_viewer::media::{GraphicsProtocol, MediaCapability, MediaKind, VideoTool};
 use herdr_file_viewer::opener::{Opener, OpenerOutcome};
 use herdr_file_viewer::presenter::{Focus, PaneGeometry};
 use herdr_file_viewer::render::Renderers;
@@ -9949,112 +9946,96 @@ fn toggle_properties_is_inert_when_not_wired() {
     assert!(!fx.quit, "an unwired toggle does not end the session");
 }
 
-// ---- Feature: capability-gated inline media preview --------------------------------------
-
-/// A test double for the media-preview seam: records every path it is asked to paint and returns
-/// `TookOver`, so no real backend runs and the terminal is never suspended (hermetic).
-struct StubMediaViewer {
-    viewed: Arc<Mutex<Vec<PathBuf>>>,
-}
-impl MediaViewer for StubMediaViewer {
-    fn view(&mut self, path: &Path, _kind: MediaKind) -> MediaOutcome {
-        self.viewed.lock().unwrap().push(path.to_path_buf());
-        MediaOutcome::TookOver
-    }
-}
+// ---- Feature: inline media preview (ratatui-image) ---------------------------------------
 
 fn capable_media_cap() -> MediaCapability {
     MediaCapability {
         protocol: Some(GraphicsProtocol::Kitty),
-        image_backend: Some(ImageBackend::Chafa),
         video_tool: Some(VideoTool::Ffmpeg),
     }
 }
 
 #[test]
-fn enter_paints_a_capable_media_file_inline() {
-    // With a capable terminal + backend, Enter on an image hands it to the media viewer (a
-    // terminal takeover → full repaint) rather than zooming.
+fn enter_zooms_a_media_file_like_any_other() {
+    // A media file auto-displays inline (painted by the app's `MediaPane`), so activating it just
+    // zooms the pane for a larger view — exactly like any other file. No suspend/paint.
     let dir = TempDir::new();
     std::fs::write(dir.path().join("pic.png"), [0x89, b'P', b'N', b'G']).unwrap();
     let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
-    let viewed = Arc::new(Mutex::new(Vec::new()));
-    ctrl.set_media_viewer(
-        capable_media_cap(),
-        Box::new(StubMediaViewer {
-            viewed: viewed.clone(),
-        }),
-    );
-    let file = dir.path().join("pic.png");
+    ctrl.set_inline_media(capable_media_cap(), true);
 
     let fx = ctrl.handle(Intent::Activate);
     assert!(
-        fx.clear,
-        "a media paint takes over the terminal → full repaint"
+        !fx.clear,
+        "no terminal takeover — the image paints in-frame"
     );
-    assert_eq!(
-        viewed.lock().unwrap().as_slice(),
-        &[file],
-        "Enter painted the image inline"
-    );
+    assert!(ctrl.view_state().zoomed, "Enter zooms the media pane");
+}
+
+#[test]
+fn inline_media_reports_the_displayed_image_when_enabled() {
+    // With inline media enabled and a graphics protocol available, the displayed image is exposed
+    // via `inline_media()` (the app's `MediaPane` reads it to paint the image).
+    let dir = TempDir::new();
+    std::fs::write(dir.path().join("pic.png"), [0x89, b'P', b'N', b'G']).unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    ctrl.set_inline_media(capable_media_cap(), true);
+    // Drive the render so `content_path` (which `inline_media()` keys off) is set to the image.
+    await_marker(&mut ctrl, "stub-content");
+
+    let im = ctrl.inline_media().expect("a displayed image is inline");
+    assert_eq!(im.path, dir.path().join("pic.png"));
+    assert_eq!(im.kind, MediaKind::Image);
+}
+
+#[test]
+fn inline_media_is_none_when_disabled() {
+    // Enabled = false (no graphics protocol) → nothing to paint, even for an image.
+    let dir = TempDir::new();
+    std::fs::write(dir.path().join("pic.png"), [0x89, b'P', b'N', b'G']).unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    ctrl.set_inline_media(capable_media_cap(), false);
+    await_marker(&mut ctrl, "stub-content");
+
     assert!(
-        !ctrl.view_state().zoomed,
-        "painting inline does not zoom the placeholder"
+        ctrl.inline_media().is_none(),
+        "disabled inline media exposes nothing to paint"
     );
 }
 
 #[test]
-fn enter_zooms_media_when_the_terminal_is_incapable() {
-    // No image backend → the capability gate fails, so Enter falls through to the usual zoom of
-    // the media placeholder; the viewer seam is never called.
+fn inline_media_is_none_for_a_video_without_a_poster_tool() {
+    // A video needs a poster tool to produce a frame; without ffmpeg there is nothing to show
+    // inline, so it stays metadata-only.
     let dir = TempDir::new();
-    std::fs::write(dir.path().join("pic.png"), [0x89, b'P', b'N', b'G']).unwrap();
+    std::fs::write(dir.path().join("clip.mp4"), [0u8; 8]).unwrap();
     let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
-    let viewed = Arc::new(Mutex::new(Vec::new()));
-    let incapable = MediaCapability {
-        protocol: Some(GraphicsProtocol::Kitty),
-        image_backend: None,
-        video_tool: None,
-    };
-    ctrl.set_media_viewer(
-        incapable,
-        Box::new(StubMediaViewer {
-            viewed: viewed.clone(),
-        }),
+    ctrl.set_inline_media(
+        MediaCapability {
+            protocol: Some(GraphicsProtocol::Kitty),
+            video_tool: None,
+        },
+        true,
     );
+    await_marker(&mut ctrl, "stub-content");
 
-    let fx = ctrl.handle(Intent::Activate);
-    assert!(!fx.clear, "no capable backend → no terminal takeover");
     assert!(
-        viewed.lock().unwrap().is_empty(),
-        "an incapable terminal never calls the media viewer"
-    );
-    assert!(
-        ctrl.view_state().zoomed,
-        "Enter zooms the media placeholder instead"
+        ctrl.inline_media().is_none(),
+        "a video with no poster tool has no inline frame"
     );
 }
 
 #[test]
-fn enter_on_a_non_media_file_never_paints() {
-    // A capable media viewer is wired, but a `.rs` is not media → normal zoom, no paint.
+fn inline_media_is_none_for_a_non_media_file() {
+    // A `.rs` is not media → nothing inline, whatever the capability.
     let dir = TempDir::new();
     std::fs::write(dir.path().join("code.rs"), "fn main() {}\n").unwrap();
     let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
-    let viewed = Arc::new(Mutex::new(Vec::new()));
-    ctrl.set_media_viewer(
-        capable_media_cap(),
-        Box::new(StubMediaViewer {
-            viewed: viewed.clone(),
-        }),
-    );
+    ctrl.set_inline_media(capable_media_cap(), true);
+    await_marker(&mut ctrl, "stub-content");
 
-    ctrl.handle(Intent::Activate);
-    assert!(
-        viewed.lock().unwrap().is_empty(),
-        "a code file is not painted"
-    );
-    assert!(ctrl.view_state().zoomed, "a code file zooms as before");
+    assert!(ctrl.inline_media().is_none(), "a code file is not media");
+    assert!(!ctrl.view_state().zoomed);
 }
 
 // ---- Feature: `n` opens the current file in neovim ---------------------------------------

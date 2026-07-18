@@ -24,7 +24,14 @@ use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::DefaultTerminal;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Style};
+use ratatui::text::Line;
+use ratatui::widgets::Paragraph;
+use ratatui::{DefaultTerminal, Frame};
+use ratatui_image::picker::{Picker, ProtocolType};
+use ratatui_image::protocol::StatefulProtocol;
+use ratatui_image::{Resize, StatefulImage};
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -66,14 +73,20 @@ pub fn run() -> io::Result<()> {
     let caps = eff.preview_caps();
 
     // Media preview (config `media_preview`): detect the terminal graphics capability once (cheap +
-    // cached) when enabled, else stay empty so media files show the plain binary placeholder. Both
-    // are `Copy`/`bool`, captured by value into the factory closure.
+    // cached) when enabled, else stay empty so media files show the plain binary placeholder.
     let media_preview = eff.media_preview;
     let media_cap = if media_preview {
         crate::media::detect()
     } else {
         crate::media::MediaCapability::default()
     };
+    // Whether an image can actually paint inline: the terminal advertises a graphics protocol
+    // (kitty/sixel/iterm2). Derived from the env hint so it is known *before* the ratatui terminal
+    // is initialized — the render worker (`LiveContent`) and the controller both need it up front,
+    // while the pixel-painting `MediaPane` (built after `try_init`, with a live protocol query) is
+    // only wired when this is true. `Copy`/`bool`, captured by value into the factory closure.
+    let inline_media = media_preview && media_cap.protocol.is_some();
+    let video_poster = media_cap.video_tool.is_some();
 
     // The shared frontmatter-Properties-panel flag (the `p` toggle). Shown by default (like
     // Obsidian). The live Content Renderer reads it on the worker thread when rendering markdown;
@@ -102,7 +115,8 @@ pub fn run() -> io::Result<()> {
                 renderers: factory_renderers.clone(),
                 caps,
                 media_preview,
-                media_cap,
+                inline_media,
+                video_poster,
                 show_properties: Arc::clone(&factory_properties),
             });
             RootProviders { git, content }
@@ -207,23 +221,20 @@ pub fn run() -> io::Result<()> {
         crate::opener::CommandOpener::new(current_os_kind(), Box::new(OpenerSpawner))
             .with_overrides(to_argv(eff.open.clone()), to_argv(eff.reveal.clone())),
     ));
-    // Inject the inline media-preview seam (config `media_preview`): `Enter` on an image/video
-    // paints it over a suspended terminal via the detected backend. Only wired when the preview is
-    // enabled; the controller's own capability gate (`media_cap.can_show`) still decides per file,
-    // so on an incapable terminal `Enter` just zooms the placeholder instead.
-    if media_preview {
-        controller.set_media_viewer(
-            media_cap,
-            Box::new(LiveMediaViewer {
-                cap: media_cap,
-                poster_salt: 0,
-            }),
-        );
-    }
+    // Enable inline media preview (config `media_preview`): selecting an image/video auto-displays
+    // it inline in the content pane (painted by `MediaPane` below); `Enter`/`z` zoom the pane for a
+    // larger view. `inline_media` is the env-derived "a graphics protocol is available" decision;
+    // the controller uses it to expose `inline_media()` per file (a video still needs a poster
+    // tool, checked via `media_cap.video_tool`). On an incapable terminal this stays off and media
+    // files show the metadata placeholder only.
+    controller.set_inline_media(media_cap, inline_media);
     // Share the Properties-panel flag with the controller so the `p` key flips it and re-renders.
     controller.set_properties_toggle(Arc::clone(&properties_shown));
 
     let mut terminal = ratatui::try_init()?;
+    // Build the inline-image painter now that the terminal is up (its protocol query needs the live
+    // terminal). Only when a graphics protocol is available; otherwise no image is ever painted.
+    let mut media_pane = inline_media.then(|| MediaPane::create(media_cap));
     // Mouse is additive to the keyboard-first design (AC-18): herdr forwards mouse events to a
     // pane that requests capture, while reserving Shift+mouse for the terminal's own
     // selection/copy. Best-effort so a terminal without mouse support still runs.
@@ -240,7 +251,11 @@ pub fn run() -> io::Result<()> {
         let _ = execute!(io::stdout(), DisableFocusChange);
         prev_hook(info);
     }));
-    let outcome = event_loop(&mut terminal, &mut controller);
+    let outcome = event_loop(&mut terminal, &mut controller, media_pane.as_mut());
+    // Remove any lingering video-poster scratch file before restoring the terminal.
+    if let Some(mp) = media_pane.as_mut() {
+        mp.evict();
+    }
     let _ = execute!(io::stdout(), DisableMouseCapture);
     let _ = execute!(io::stdout(), DisableFocusChange);
     ratatui::try_restore()?;
@@ -268,10 +283,26 @@ fn route_annotation_key(
 /// Draw (only when something changed), read one input (or time out), drain renders; repeat
 /// until the Close intent. Drawing only when `dirty` avoids re-walking the filesystem (the
 /// tree enumeration in `view_state`) on every idle tick.
-fn event_loop(terminal: &mut DefaultTerminal, controller: &mut Controller) -> io::Result<()> {
+fn event_loop(
+    terminal: &mut DefaultTerminal,
+    controller: &mut Controller,
+    mut media_pane: Option<&mut MediaPane>,
+) -> io::Result<()> {
     let mut dirty = true; // paint the first frame
     loop {
+        // Sync the inline-image painter with the selection BEFORE drawing, so any decode / poster
+        // extraction (blocking) happens between frames rather than inside the draw closure. Cheap
+        // and a no-op when the displayed media file hasn't changed. `None` when inline media is
+        // disabled or the display isn't an image/video.
+        let inline_media = controller.inline_media();
+        if let Some(mp) = media_pane.as_deref_mut()
+            && mp.sync(inline_media.as_ref())
+        {
+            dirty = true; // a newly-loaded image needs a paint even if nothing else changed
+        }
         if dirty {
+            let media_pane = media_pane.as_deref_mut();
+            let inline_media = inline_media.as_ref();
             terminal.draw(|frame| {
                 controller.set_width(frame.area().width);
                 let view: ViewState = controller.view_state();
@@ -280,7 +311,23 @@ fn event_loop(terminal: &mut DefaultTerminal, controller: &mut Controller) -> io
                 // it on the next intent, and the hit-test geometry so a mouse event maps to the
                 // live layout.
                 controller.set_content_viewport(cw, ch);
-                controller.set_pane_geometry(presenter::geometry(frame.area(), &view));
+                let geom = presenter::geometry(frame.area(), &view);
+                let content_inner = geom.content_inner;
+                controller.set_pane_geometry(geom);
+                // Overlay the inline image below the metadata header, within the content pane's
+                // interior. The presenter has already drawn the metadata placeholder text; the
+                // image fills the rows beneath it.
+                if let (Some(mp), Some(im), Some(inner)) = (media_pane, inline_media, content_inner)
+                {
+                    let header = im.header_rows.min(inner.height);
+                    let img_area = Rect {
+                        x: inner.x,
+                        y: inner.y + header,
+                        width: inner.width,
+                        height: inner.height.saturating_sub(header),
+                    };
+                    mp.render(frame, img_area);
+                }
             })?;
             dirty = false;
         }
@@ -485,9 +532,12 @@ struct LiveContent {
     /// Whether image/video files get the media placeholder (config `media_preview`). When off,
     /// they fall through to the plain binary placeholder.
     media_preview: bool,
-    /// The detected terminal graphics capability, for the placeholder's "inline preview available"
-    /// line. Empty when `media_preview` is off.
-    media_cap: crate::media::MediaCapability,
+    /// Whether an inline image will actually paint (a graphics protocol is available). Controls the
+    /// placeholder wording: metadata-only when the image renders below, else an info-only notice.
+    inline_media: bool,
+    /// Whether a video poster tool (ffmpeg/ffmpegthumbnailer) is on `PATH`, so a *video* can show a
+    /// frame. Feeds the placeholder's "install ffmpeg" notice when absent.
+    video_poster: bool,
     /// The shared frontmatter-Properties-panel flag (the `p` toggle), read on this worker thread
     /// when rendering markdown. Shown by default; flipped by the controller.
     show_properties: Arc<AtomicBool>,
@@ -532,7 +582,14 @@ impl LiveContent {
             crate::media::MediaKind::Image => crate::media::image_dimensions(path),
             crate::media::MediaKind::Video => None,
         };
-        let text = crate::media::placeholder(kind, name, size, dimensions, &self.media_cap);
+        let text = crate::media::placeholder(
+            kind,
+            name,
+            size,
+            dimensions,
+            self.inline_media,
+            self.video_poster,
+        );
         RenderResult {
             // Route through `to_text` so the (untrusted) file name in the placeholder is
             // escape-neutralized like all other displayed content (AC-27).
@@ -850,33 +907,120 @@ fn resume_tui() -> io::Result<()> {
     Ok(())
 }
 
-/// The live media-preview seam (the `Enter`-on-media paint). It suspends the TUI, paints an image
-/// — or a video's extracted poster frame — over the **clean, non-alternate** screen via the
-/// detected backend, waits for the user, then resumes. The graphics-protocol bytes therefore reach
-/// a real terminal that supports them (this seam is only wired when the capability is present), and
-/// never the ratatui frame buffer, so an incapable terminal is never sent escape garbage. Read-only:
-/// a video poster is written only to a temp scratch file, removed afterward; the source is untouched.
-struct LiveMediaViewer {
-    cap: crate::media::MediaCapability,
-    /// A per-call salt so a session's poster scratch paths never collide.
+/// The inline-image painter. Owns the `ratatui-image` picker plus the currently-loaded image
+/// protocol, and draws the image into the content pane every frame (auto-displayed when a media
+/// file is selected — no keypress). Built once the terminal is up (its protocol query needs a live
+/// terminal) and only when a graphics protocol is available. Read-only: it decodes image files (a
+/// bounded decode) and, for a video, extracts a poster frame to a temp scratch file it deletes on
+/// eviction; it never writes the source. The graphics escapes are emitted by ratatui-image via the
+/// frame buffer (unicode-placeholder kitty / sixel / iterm2), so an incapable terminal is never
+/// reached (the pane is not built when no protocol is present).
+struct MediaPane {
+    picker: Picker,
+    /// The video poster tool (ffmpeg/ffmpegthumbnailer) if one is on `PATH`; `None` → a video can't
+    /// show a frame (the controller then never offers inline for it, but guard here too).
+    video_tool: Option<crate::media::VideoTool>,
+    /// A monotonic salt so successive poster scratch paths never collide within a session.
     poster_salt: u64,
+    /// The image currently loaded for display, keyed by its source path. Reloaded when the
+    /// selection changes; evicted (with any poster temp removed) when it leaves display.
+    current: Option<LoadedMedia>,
 }
 
-impl crate::media::MediaViewer for LiveMediaViewer {
-    fn view(&mut self, path: &Path, kind: crate::media::MediaKind) -> crate::media::MediaOutcome {
-        use crate::media::{MediaKind, MediaOutcome};
-        let (Some(backend), Some(protocol)) = (self.cap.image_backend, self.cap.protocol) else {
-            return MediaOutcome::Failed("no inline image backend".into());
-        };
+/// A loaded (or failed-to-load) inline image, keyed by the source media path.
+struct LoadedMedia {
+    key: PathBuf,
+    /// A temp poster frame to delete on eviction (video only).
+    cleanup: Option<PathBuf>,
+    outcome: LoadOutcome,
+}
 
-        // Resolve the image to paint. For a video, extract a representative poster frame first
-        // (to a temp file we clean up); for an image, paint it directly.
-        let mut cleanup: Option<PathBuf> = None;
-        let image: PathBuf = match kind {
-            MediaKind::Image => path.to_path_buf(),
+/// Either a ready-to-paint image protocol or a load failure (surfaced as a one-line notice). The
+/// protocol is boxed — it carries the decoded image, far larger than the `Failed` string.
+enum LoadOutcome {
+    Ready(Box<StatefulProtocol>),
+    Failed(String),
+}
+
+impl MediaPane {
+    /// Build the picker WITHOUT any terminal stdin query. `ratatui-image`'s `from_query_stdio`
+    /// reads stdin for the protocol/font-size response, which **breaks input** under a terminal
+    /// multiplexer (herdr) or a pty — it swallows keypresses and disturbs termios (proven by the
+    /// `cli_smoke` e2e). Instead take the cell pixel size from a non-blocking `TIOCGWINSZ`
+    /// (`window_size`) when the terminal reports it (Ghostty does), and set the protocol from our
+    /// own env detection, which is authoritative for the terminals we enable inline media on
+    /// (Ghostty→kitty, kitty, WezTerm, iTerm2, sixel). `create` is only called when that env
+    /// detection already found a protocol (`inline_media` is true), so `cap.protocol` is `Some`.
+    fn create(cap: crate::media::MediaCapability) -> Self {
+        // Cell pixel size = window pixel size / grid size, when the terminal reports pixels.
+        let font_size = crossterm::terminal::window_size().ok().and_then(|w| {
+            (w.width > 0 && w.height > 0 && w.columns > 0 && w.rows > 0).then(|| {
+                ratatui_image::FontSize::new(
+                    (w.width / w.columns).max(1),
+                    (w.height / w.rows).max(1),
+                )
+            })
+        });
+        // `from_fontsize` is deprecated in favour of `from_query_stdio`, but that is exactly the
+        // input-breaking query we must avoid here; `halfblocks()` supplies a sane default cell size
+        // (10×20) when the terminal reports no pixels (e.g. inside a multiplexer).
+        #[allow(deprecated)]
+        let mut picker = match font_size {
+            Some(fs) => Picker::from_fontsize(fs),
+            None => Picker::halfblocks(),
+        };
+        if let Some(pt) = cap.protocol.map(env_protocol_to_ratatui) {
+            picker.set_protocol_type(pt);
+        }
+        MediaPane {
+            picker,
+            video_tool: cap.video_tool,
+            poster_salt: 0,
+            current: None,
+        }
+    }
+
+    /// Reconcile the loaded image with the current selection. Returns `true` when a new image was
+    /// loaded or the previous one evicted (so the caller repaints). The blocking work (decode /
+    /// poster extraction) happens here, between frames — never in the draw closure. A no-op when
+    /// the media path is unchanged.
+    fn sync(&mut self, want: Option<&crate::media::InlineMedia>) -> bool {
+        match want {
+            None => {
+                let had = self.current.is_some();
+                self.evict();
+                had
+            }
+            Some(im) => {
+                if self.current.as_ref().is_some_and(|c| c.key == im.path) {
+                    return false; // already loaded (or failed) for this exact file
+                }
+                self.evict();
+                let (outcome, cleanup) = self.load(&im.path, im.kind);
+                self.current = Some(LoadedMedia {
+                    key: im.path.clone(),
+                    cleanup,
+                    outcome,
+                });
+                true
+            }
+        }
+    }
+
+    /// Decode `path` into a paintable protocol. For a video, extract a representative poster frame
+    /// to a temp file first (returned as the cleanup path). Any failure yields a `Failed` notice
+    /// rather than panicking.
+    fn load(
+        &mut self,
+        path: &Path,
+        kind: crate::media::MediaKind,
+    ) -> (LoadOutcome, Option<PathBuf>) {
+        use crate::media::MediaKind;
+        let (image_path, cleanup) = match kind {
+            MediaKind::Image => (path.to_path_buf(), None),
             MediaKind::Video => {
-                let Some(tool) = self.cap.video_tool else {
-                    return MediaOutcome::Failed("no video poster tool (install ffmpeg)".into());
+                let Some(tool) = self.video_tool else {
+                    return (LoadOutcome::Failed("no video poster tool".into()), None);
                 };
                 self.poster_salt = self.poster_salt.wrapping_add(1);
                 let out = crate::media::poster_scratch(path, self.poster_salt);
@@ -884,49 +1028,88 @@ impl crate::media::MediaViewer for LiveMediaViewer {
                     crate::media::video_poster_argv(tool, path, &out, ffprobe_duration(path));
                 if !run_quiet(&argv) || !out.is_file() {
                     let _ = std::fs::remove_file(&out);
-                    return MediaOutcome::Failed("could not extract a poster frame".into());
+                    return (
+                        LoadOutcome::Failed("could not extract a poster frame".into()),
+                        None,
+                    );
                 }
-                cleanup = Some(out.clone());
-                out
+                (out.clone(), Some(out))
             }
         };
-
-        // Suspend so the backend paints onto a clean screen; always resume afterward.
-        if suspend_tui().is_err() {
-            let _ = resume_tui();
-            if let Some(p) = cleanup {
-                let _ = std::fs::remove_file(p);
+        match decode_image(&image_path) {
+            Ok(img) => (
+                LoadOutcome::Ready(Box::new(self.picker.new_resize_protocol(img))),
+                cleanup,
+            ),
+            Err(reason) => {
+                if let Some(p) = &cleanup {
+                    let _ = std::fs::remove_file(p);
+                }
+                (LoadOutcome::Failed(reason), None)
             }
-            return MediaOutcome::Failed("could not suspend the terminal".into());
-        }
-        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-        let paint_rows = rows.saturating_sub(3).max(1); // leave room for the header + prompt
-        let name = path.file_name().and_then(OsStr::to_str).unwrap_or("");
-        {
-            let mut out = io::stdout();
-            let _ = write!(out, "\r\n  {name}\r\n\r\n");
-            let _ = out.flush();
-        }
-        let argv = crate::media::image_argv(backend, protocol, &image, cols, paint_rows);
-        let painted = run_inherit(&argv);
-        {
-            let mut out = io::stdout();
-            let _ = write!(out, "\r\n\r\n  Press Enter to return to the viewer… ");
-            let _ = out.flush();
-        }
-        // Cooked mode after suspend: read a line so the user can view before we resume.
-        let mut buf = String::new();
-        let _ = io::stdin().read_line(&mut buf);
-        let _ = resume_tui();
-        if let Some(p) = cleanup {
-            let _ = std::fs::remove_file(p);
-        }
-        if painted {
-            MediaOutcome::TookOver
-        } else {
-            MediaOutcome::Failed("the image backend failed".into())
         }
     }
+
+    /// Paint the loaded image into `area` (already offset below the metadata header). A load
+    /// failure draws a one-line notice instead. No-op when nothing is loaded or the area is empty.
+    fn render(&mut self, frame: &mut Frame, area: Rect) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        match self.current.as_mut().map(|c| &mut c.outcome) {
+            Some(LoadOutcome::Ready(proto)) => {
+                // Fit within the area preserving aspect ratio (never upscale past natural size).
+                frame.render_stateful_widget(
+                    StatefulImage::default().resize(Resize::Fit(None)),
+                    area,
+                    proto.as_mut(),
+                );
+            }
+            Some(LoadOutcome::Failed(reason)) => {
+                frame.render_widget(
+                    Paragraph::new(Line::styled(
+                        format!("⚠ {reason}"),
+                        Style::new().fg(Color::Yellow),
+                    )),
+                    area,
+                );
+            }
+            None => {}
+        }
+    }
+
+    /// Drop the loaded image and remove any poster scratch file.
+    fn evict(&mut self) {
+        if let Some(c) = self.current.take()
+            && let Some(p) = c.cleanup
+        {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// Map our env-detected graphics protocol to the `ratatui-image` protocol type.
+fn env_protocol_to_ratatui(p: crate::media::GraphicsProtocol) -> ProtocolType {
+    match p {
+        crate::media::GraphicsProtocol::Kitty => ProtocolType::Kitty,
+        crate::media::GraphicsProtocol::Iterm2 => ProtocolType::Iterm2,
+        crate::media::GraphicsProtocol::Sixel => ProtocolType::Sixel,
+    }
+}
+
+/// Decode an image file into a [`image::DynamicImage`], bounding dimensions so a decompression bomb
+/// can't blow up memory (the `image` crate's default 512 MiB allocation cap still applies too —
+/// constitution: untrusted file content). Returns a short reason string on any failure.
+fn decode_image(path: &Path) -> Result<image::DynamicImage, String> {
+    let mut reader = image::ImageReader::open(path)
+        .map_err(|e| e.to_string())?
+        .with_guessed_format()
+        .map_err(|e| e.to_string())?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(30_000);
+    limits.max_image_height = Some(30_000);
+    reader.limits(limits);
+    reader.decode().map_err(|e| e.to_string())
 }
 
 /// Run a command discarding all stdio, returning whether it exited 0. For the poster extraction,
@@ -940,19 +1123,6 @@ fn run_quiet(argv: &[String]) -> bool {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-/// Run a command inheriting stdio so it paints to the (suspended) terminal; returns whether it
-/// exited 0.
-fn run_inherit(argv: &[String]) -> bool {
-    let Some((prog, args)) = argv.split_first() else {
-        return false;
-    };
-    Command::new(prog)
-        .args(args)
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
@@ -1498,7 +1668,8 @@ mod tests {
             },
             caps: Caps::default(),
             media_preview: false,
-            media_cap: crate::media::MediaCapability::default(),
+            inline_media: false,
+            video_poster: false,
             show_properties: Arc::new(AtomicBool::new(true)),
         }
     }
@@ -1527,7 +1698,8 @@ mod tests {
                 max_bytes: 1024 * 1024,
             },
             media_preview: false,
-            media_cap: crate::media::MediaCapability::default(),
+            inline_media: false,
+            video_poster: false,
             show_properties: Arc::new(AtomicBool::new(true)),
         };
         let out = content.render_at_width(&file, ViewMode::SyntaxContent, None, None);
@@ -1539,11 +1711,11 @@ mod tests {
     }
 
     #[test]
-    fn livecontent_renders_a_media_placeholder_and_degrades_with_no_backend() {
-        // The graceful-fallback proof: with `media_preview` on but an EMPTY capability (no
-        // protocol, no backend — the "no backend installed" case), an image renders the plain
-        // placeholder (type, parsed dimensions, size) instead of `[binary file]`, and never emits
-        // an escape byte to an incapable terminal.
+    fn livecontent_renders_a_media_placeholder_and_degrades_without_a_graphics_terminal() {
+        // The graceful-fallback proof: with `media_preview` on but no graphics protocol
+        // (`inline_media = false` — a plain terminal), an image renders the metadata placeholder
+        // (type, parsed dimensions, size) plus an info-only notice instead of `[binary file]`, and
+        // never emits an escape byte to an incapable terminal.
         let root = tmp("media-placeholder");
         let img = root.join("photo.png");
         // A minimal valid PNG header so dimensions parse (64x48).
@@ -1559,7 +1731,8 @@ mod tests {
             renderers: default_renderers(),
             caps: Caps::default(),
             media_preview: true,
-            media_cap: crate::media::MediaCapability::default(), // no protocol, no backend
+            inline_media: false, // no graphics protocol → info-only placeholder
+            video_poster: false,
             show_properties: Arc::new(AtomicBool::new(true)),
         };
         let out = content.render_at_width(&img, ViewMode::SyntaxContent, None, None);
@@ -1588,7 +1761,8 @@ mod tests {
             renderers: default_renderers(),
             caps: Caps::default(),
             media_preview: false,
-            media_cap: crate::media::MediaCapability::default(),
+            inline_media: false,
+            video_poster: false,
             show_properties: Arc::new(AtomicBool::new(true)),
         };
         let out = off.render_at_width(&img, ViewMode::SyntaxContent, None, None);
@@ -1632,7 +1806,8 @@ mod tests {
             },
             caps: Caps::default(),
             media_preview: false,
-            media_cap: crate::media::MediaCapability::default(),
+            inline_media: false,
+            video_poster: false,
             show_properties: Arc::new(AtomicBool::new(true)),
         }
     }
@@ -1680,7 +1855,8 @@ mod tests {
             },
             caps: Caps::default(),
             media_preview: false,
-            media_cap: crate::media::MediaCapability::default(),
+            inline_media: false,
+            video_poster: false,
             show_properties: flag.clone(),
         };
         // Shown (default): a Properties table with the title + tag chips is prepended above the body.

@@ -592,14 +592,16 @@ pub struct Controller {
     /// post-construction via [`set_neovim_editor`](Self::set_neovim_editor) (like `opener`);
     /// `None` in tests that never wire it, in which case `n` reports "neovim not configured".
     neovim_editor: Option<Box<dyn EditorHandoff>>,
-    /// The detected terminal graphics capability (protocol + backend + video tool) for the inline
-    /// media preview. Default-empty (all `None`) so a test controller can never paint; set at
-    /// wiring from `media::detect()` when `media_preview` is on. Gates whether `Enter` on a media
-    /// file paints it inline vs. zooms the placeholder.
+    /// The detected terminal graphics capability (env graphics protocol + video tool) for the
+    /// inline media preview. Default-empty (all `None`) so a test controller never advertises
+    /// inline media; set at wiring from `media::detect()` when `media_preview` is on. Its
+    /// `video_tool` gates whether a *video* can offer an inline poster frame.
     media_cap: crate::media::MediaCapability,
-    /// The read-only media-preview seam (suspend/paint/resume over the terminal). `None` in tests
-    /// and when `media_preview` is off; injected via [`set_media_viewer`](Self::set_media_viewer).
-    media_viewer: Option<Box<dyn crate::media::MediaViewer>>,
+    /// Whether the app layer has a working graphics picker (kitty/sixel/iterm2) that can actually
+    /// paint an inline image. Set at wiring by [`set_inline_media`](Self::set_inline_media); the
+    /// `MediaPane` in `app.rs` does the painting. Default `false`, so a test/headless controller
+    /// exposes no [`inline_media`](Self::inline_media) and a media file simply zooms its metadata.
+    inline_media_enabled: bool,
     /// The shared "show the frontmatter Properties panel" flag (the `p` toggle). Shared with the
     /// live Content Renderer (which reads it on the worker thread when rendering markdown), so a
     /// flip + re-render shows/hides the panel. `None` in tests that never wire it (then `p` is an
@@ -821,7 +823,7 @@ impl Controller {
             editor,
             neovim_editor: None,
             media_cap: crate::media::MediaCapability::default(),
-            media_viewer: None,
+            inline_media_enabled: false,
             properties_shown: None,
             clipboard,
             providers,
@@ -1225,22 +1227,41 @@ impl Controller {
         self.neovim_editor = Some(editor);
     }
 
-    /// Inject the inline media-preview seam and the detected capability (only when `media_preview`
-    /// is on). Post-construction, like [`set_opener`](Self::set_opener). With this set and a
-    /// capable terminal, `Enter` on an image/video paints it inline; otherwise `Enter` zooms the
-    /// content pane's media placeholder as usual.
-    pub fn set_media_viewer(
-        &mut self,
-        cap: crate::media::MediaCapability,
-        viewer: Box<dyn crate::media::MediaViewer>,
-    ) {
+    /// Enable inline media preview (only when `media_preview` is on and the app's graphics picker
+    /// reports a real protocol). `cap` carries the env graphics hint + video poster tool; `enabled`
+    /// is whether an inline image can actually paint. Post-construction, like
+    /// [`set_opener`](Self::set_opener). With this on, selecting an image/video auto-displays it
+    /// inline (the `MediaPane` in `app.rs` paints it); `Enter`/`z` then zoom the pane larger.
+    pub fn set_inline_media(&mut self, cap: crate::media::MediaCapability, enabled: bool) {
         self.media_cap = cap;
-        self.media_viewer = Some(viewer);
+        self.inline_media_enabled = enabled;
+    }
+
+    /// The inline-media descriptor for the *currently displayed* file, or `None` when inline media
+    /// is disabled, the display isn't a recognized image/video, or a video has no poster tool. The
+    /// app's `MediaPane` reads this each loop tick to (de)load the image protocol, and the draw
+    /// path uses `header_rows` to place the image below the metadata. Cheap — no tree walk.
+    pub fn inline_media(&self) -> Option<crate::media::InlineMedia> {
+        if !self.inline_media_enabled {
+            return None;
+        }
+        let path = self.content_path.as_ref()?;
+        let kind = crate::media::classify(path)?;
+        // A video with no poster tool can't produce a frame → show metadata only (no inline).
+        if kind == crate::media::MediaKind::Video && self.media_cap.video_tool.is_none() {
+            return None;
+        }
+        Some(crate::media::InlineMedia {
+            path: path.clone(),
+            kind,
+            // The metadata placeholder occupies the top of the content pane; the image paints in
+            // the rows below it. `content` is that placeholder whenever `content_path` is media.
+            header_rows: self.content.lines.len() as u16,
+        })
     }
 
     /// Inject the shared frontmatter-Properties-panel flag (the `p` toggle). Shared with the live
-    /// Content Renderer so a flip + re-render shows/hides the panel. Post-construction, like
-    /// [`set_media_viewer`](Self::set_media_viewer).
+    /// Content Renderer so a flip + re-render shows/hides the panel. Post-construction.
     pub fn set_properties_toggle(&mut self, shown: Arc<AtomicBool>) {
         self.properties_shown = Some(shown);
     }
@@ -1930,45 +1951,13 @@ impl Controller {
                 Effects::redraw()
             }
             NodeKind::File => {
-                // A capable terminal + backend paints an image/video inline over a suspended
-                // terminal (never into the ratatui frame). Otherwise fall through to zoom, which
-                // reads the media placeholder (type/dimensions/size) full-screen.
-                if let Some(kind) = crate::media::classify(&node.path)
-                    && self.media_cap.can_show(kind)
-                    && self.media_viewer.is_some()
-                {
-                    let path = node.path.clone();
-                    return self.preview_media(&path, kind);
-                }
+                // A media file already auto-displays inline in the split (see
+                // `Controller::inline_media` + `app::MediaPane`); activating it just zooms the
+                // content pane so the image gets the whole frame, exactly like any other file
+                // (which zooms to read full-screen). No suspend/paint, no re-render.
                 self.zoomed = true;
                 self.focus = Focus::Content;
                 Effects::redraw()
-            }
-        }
-    }
-
-    /// Paint a media file inline via the injected [`MediaViewer`](crate::media::MediaViewer) seam
-    /// (suspend the TUI, render over the clean terminal, wait, resume). The paint drew over the
-    /// screen, so a full repaint follows (`clear`). A failure is a non-fatal notice; nothing is
-    /// ever written to the previewed file (AC-N1). Guarded by [`activate`](Self::activate) to a
-    /// media file the capability can actually show.
-    fn preview_media(&mut self, path: &Path, kind: crate::media::MediaKind) -> Effects {
-        let Some(viewer) = self.media_viewer.as_mut() else {
-            return Effects::noop();
-        };
-        match viewer.view(path, kind) {
-            crate::media::MediaOutcome::TookOver => Effects {
-                redraw: true,
-                clear: true,
-                ..Default::default()
-            },
-            crate::media::MediaOutcome::Failed(reason) => {
-                self.action_notice = Some(format!("Could not preview media: {reason}"));
-                Effects {
-                    redraw: true,
-                    clear: true,
-                    ..Default::default()
-                }
             }
         }
     }
