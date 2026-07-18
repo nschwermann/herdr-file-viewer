@@ -150,6 +150,23 @@ Because the rendered markdown view has no per-line source map, jumping switches 
 line-numbered **source** view and scrolls there — the same behaviour go-to-line (`:`) uses when you
 jump from a rendered view.
 
+## Quick-switch to any note (Obsidian vaults)
+
+When your selection is inside an **Obsidian vault**, press **`F`** to open the **quick-switcher** —
+the viewer's equivalent of Obsidian's ⌘O. It's a fuzzy finder over *every* note in the vault: type
+to filter by a note's **name** or a frontmatter **alias** (`aliases:` / `alias:`), move with `↑` /
+`↓`, press `Enter` to open the chosen note in-viewer, and `Esc` to cancel. Opening a note this way
+records it in the same `[` / `]` back-forward history the [link navigator](#following-wikilinks-obsidian-vaults)
+uses, so you can retrace your steps.
+
+This is distinct from **`f`** (go-to-file), which fuzzy-finds the *repository's files* by path:
+`F` finds vault **notes** by name/alias, vault-wide, wherever they live. If you are not inside a
+vault, a short notice is shown and nothing opens.
+
+The vault is discovered from the nearest `.obsidian/` ancestor of your current selection, and its
+notes are indexed once and cached; the index is rebuilt when you switch worktree or press `r`
+(refresh), so a note added or renamed *outside* the viewer shows up after a refresh.
+
 ## Obsidian markdown rendering
 
 The rendered markdown view (`v`) understands some Obsidian-flavored markdown that `glow` alone does

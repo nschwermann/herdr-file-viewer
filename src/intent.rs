@@ -158,6 +158,11 @@ pub enum Intent {
     /// Go forward in the link-navigation history (`]`), the inverse of [`Intent::NavBack`].
     /// Read-only navigation; a no-op notice when the forward-stack is empty.
     NavForward,
+    /// Open the vault quick-switcher (`F`): a fuzzy finder over every note in the containing Obsidian
+    /// vault, matched by name or frontmatter alias, that opens the chosen note in-viewer (Obsidian's
+    /// ⌘O). Read-only navigation — it only moves the in-pane selection (AC-N1, AC-N3). Opens only
+    /// inside a vault; otherwise it shows a notice and opens nothing.
+    OpenQuickSwitcher,
     /// Close the viewer and return control to the prior pane (AC-20).
     Close,
 }
@@ -165,7 +170,7 @@ pub enum Intent {
 impl Intent {
     /// Every intent variant — lets the dispatcher and tests enumerate the closed set so
     /// keyboard-completeness (AC-18) and the no-file/git-mutation invariant (AC-N3) stay checkable.
-    pub const ALL: [Intent; 41] = [
+    pub const ALL: [Intent; 42] = [
         Intent::NavUp,
         Intent::NavDown,
         Intent::Expand,
@@ -205,6 +210,7 @@ impl Intent {
         Intent::OpenOutline,
         Intent::NavBack,
         Intent::NavForward,
+        Intent::OpenQuickSwitcher,
         Intent::ShowHelp,
         Intent::Close,
     ];
@@ -261,6 +267,7 @@ mod tests {
                 | Intent::OpenOutline
                 | Intent::NavBack
                 | Intent::NavForward
+                | Intent::OpenQuickSwitcher
                 | Intent::ShowHelp
                 | Intent::Close => (false, false),
             };
@@ -335,11 +342,19 @@ mod tests {
     }
 
     #[test]
-    fn all_length_is_41() {
+    fn all_length_is_42() {
         assert_eq!(
             Intent::ALL.len(),
-            41,
-            "Intent::ALL must have exactly 41 variants after adding OpenOutline"
+            42,
+            "Intent::ALL must have exactly 42 variants after adding OpenQuickSwitcher"
+        );
+    }
+
+    #[test]
+    fn open_quick_switcher_is_in_all() {
+        assert!(
+            Intent::ALL.contains(&Intent::OpenQuickSwitcher),
+            "Intent::ALL must contain OpenQuickSwitcher"
         );
     }
 

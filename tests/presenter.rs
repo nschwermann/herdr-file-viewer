@@ -6,7 +6,8 @@ use herdr_file_viewer::git::Status;
 use herdr_file_viewer::presenter::{
     AnnotationEditorKind, AnnotationEditorView, AnnotationIndicatorsView, AnnotationOverviewView,
     AnnotationRowView, AnnotationTargetView, CharSelView, ContentSearch, DiscardConfirmView,
-    FinderView, Focus, HelpView, LineSelectView, PickerRowView, PickerView, ViewState, draw,
+    FinderView, Focus, HelpView, LineSelectView, PickerRowView, PickerView, QuickSwitcherView,
+    ViewState, draw,
 };
 use herdr_file_viewer::render::to_text;
 use herdr_file_viewer::search::Match;
@@ -107,6 +108,7 @@ fn sample_state() -> ViewState {
         help: None,
         link_nav: None,
         outline: None,
+        quick_switcher: None,
     }
 }
 
@@ -4611,4 +4613,59 @@ fn discard_confirm_names_the_pending_action_not_always_quit() {
         "a worktree switch must never offer to quit\n{out}"
     );
     insta::assert_snapshot!("presenter_discard_confirm_switch", out);
+}
+
+// ---- Quick-switcher overlay -----------------------------------------------------------
+
+fn quick_switcher_state(query: &str, rows: Vec<&str>, cursor: usize) -> ViewState {
+    let mut state = sample_state();
+    state.quick_switcher = Some(QuickSwitcherView {
+        query: query.to_string(),
+        rows: rows.into_iter().map(str::to_string).collect(),
+        cursor,
+    });
+    state
+}
+
+#[test]
+fn quick_switcher_overlay_empty_query_shows_title_and_placeholder() {
+    let out = render(&quick_switcher_state("", vec![], 0), 100, 24);
+    assert!(
+        out.contains("Switch note"),
+        "the switcher title is shown\n{out}"
+    );
+    assert!(
+        out.contains("type to find a note"),
+        "the placeholder is shown when the query is empty\n{out}"
+    );
+    // The tree still renders beneath the overlay (partial modal).
+    assert!(
+        out.contains("┌r"),
+        "the tree column draws under the overlay\n{out}"
+    );
+}
+
+#[test]
+fn quick_switcher_overlay_shows_rows_and_highlights_cursor() {
+    use ratatui::style::Modifier;
+    let state = quick_switcher_state("be", vec!["Beta", "sub/Beta", "nickname  ·  Beta"], 1);
+    let out = render(&state, 100, 24);
+    assert!(out.contains("Beta"), "matched rows appear\n{out}");
+    assert!(out.contains("nickname"), "the alias row appears\n{out}");
+
+    // The cursor row (index 1, "sub/Beta") is REVERSED.
+    let buf = render_buffer(&state, 100, 24);
+    let mut found_reversed_beta = false;
+    for y in 0..buf.area().height {
+        let mut row = String::new();
+        for x in 0..buf.area().width {
+            row.push_str(buf[(x, y)].symbol());
+        }
+        if row.contains("sub/Beta")
+            && (0..buf.area().width).any(|x| buf[(x, y)].modifier.contains(Modifier::REVERSED))
+        {
+            found_reversed_beta = true;
+        }
+    }
+    assert!(found_reversed_beta, "the cursor row is highlighted\n{out}");
 }

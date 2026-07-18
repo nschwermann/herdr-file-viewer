@@ -402,6 +402,13 @@ pub(crate) const REGISTRY: &[Binding] = &[
         category: "Search & jump",
     },
     Binding {
+        intent: Intent::OpenQuickSwitcher,
+        name: "quick_switcher",
+        default_keys: &[KeyCode::Char('F')],
+        description: "Quick-switch to any note in the vault by name or alias.",
+        category: "Search & jump",
+    },
+    Binding {
         intent: Intent::TreeScrollLeft,
         name: "tree_scroll_left",
         default_keys: &[KeyCode::Char('H')],
@@ -742,6 +749,7 @@ mod tests {
         (KeyCode::Char('M'), Intent::PrevMatch),
         (KeyCode::Char('g'), Intent::OpenLinkNav),
         (KeyCode::Char('o'), Intent::OpenOutline),
+        (KeyCode::Char('F'), Intent::OpenQuickSwitcher),
         (KeyCode::Char('['), Intent::NavBack),
         (KeyCode::Char(']'), Intent::NavForward),
         (KeyCode::Char('H'), Intent::TreeScrollLeft),

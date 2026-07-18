@@ -176,6 +176,9 @@ pub struct ViewState {
     /// When `Some`, the heading-outline overlay is drawn on top of the columns (the `o` key).
     /// `None` ⇒ no overlay. A centered list of the current note's headings, indented by level.
     pub outline: Option<OutlineView>,
+    /// When `Some`, the vault quick-switcher overlay is drawn on top of the columns (the `F` key).
+    /// `None` ⇒ no overlay. A query + fuzzy-ranked list of the vault's notes, mirroring the finder.
+    pub quick_switcher: Option<QuickSwitcherView>,
 }
 
 /// The worktree picker's draw model (an owned snapshot of the controller's picker state, so
@@ -306,6 +309,19 @@ pub struct OutlineRowView {
     pub text: String,
     /// The ATX heading level 1..=6 — drives the row's indent (level-1 steps).
     pub level: u8,
+}
+
+/// The quick-switcher overlay's draw model — a query line plus fuzzy-matched vault-note rows (an
+/// owned snapshot of the controller's [`crate::switcher::SwitcherState`], so the Presenter stays
+/// borrow-free). Built by the Session Controller's `view_state()`. Mirrors [`FinderView`], but the
+/// rows are note labels (name / `alias · note`) rather than repo file paths.
+pub struct QuickSwitcherView {
+    /// The current query text drawn on the input line.
+    pub query: String,
+    /// The fuzzy-matched note-row labels, ranked best-first. Empty when the query is empty.
+    pub rows: Vec<String>,
+    /// Index into `rows` of the highlighted row.
+    pub cursor: usize,
 }
 
 /// Owned, typed persistent-indicator projection for the pure Presenter.
@@ -1691,6 +1707,10 @@ pub fn draw(frame: &mut Frame, state: &ViewState) -> (u16, u16) {
     if let Some(outline) = &state.outline {
         draw_outline_overlay(frame, frame.area(), outline);
     }
+    // The vault quick-switcher is also a modal overlay (keyboard-only). Only one modal is ever open.
+    if let Some(qs) = &state.quick_switcher {
+        draw_quick_switcher_overlay(frame, frame.area(), qs);
+    }
     // Annotation modals are keyboard-only overlays. They add no hit-test geometry; their owned,
     // typed draw models contain raw fields and the Presenter formats/sanitizes them here.
     if let Some(overview) = &state.annotation_overview {
@@ -2487,6 +2507,156 @@ fn draw_outline_overlay(frame: &mut Frame, area: Rect, outline: &OutlineView) {
             &mut sb_state.clone(),
         );
     }
+}
+
+/// The quick-switcher overlay's top-left title (the box label).
+const QUICK_SWITCHER_TITLE: &str = "Switch note";
+/// The quick-switcher overlay's key-hint footer on the bottom border.
+const QUICK_SWITCHER_FOOTER: &str = "↑↓ move · ⏎ open · esc cancel";
+/// The prompt prefix shown on the quick-switcher's query-input line.
+const QUICK_SWITCHER_PROMPT: &str = "> ";
+/// The placeholder shown on the quick-switcher's query-input line when the query is empty.
+const QUICK_SWITCHER_PLACEHOLDER: &str = "> type to find a note…";
+
+/// Draw a centered, size-to-content list overlay shared by the vault-navigation modals
+/// (quick-switcher, global content search, backlinks): a bordered box with the given `title` on the
+/// top border and `footer` on the bottom, an optional `query_line` on the first interior row, the
+/// cursor-highlighted `rows` beneath (vertically scrolled to keep the cursor in view), and a vertical
+/// scrollbar when the rows overflow. Keyboard-only, so — like the wikilink navigator / outline — it
+/// feeds back no hit-test geometry; the sizing/centering/scroll math lives here. The caller builds
+/// the (already sanitized/styled) `query_line` and `rows`; this owns only the chrome + layout.
+fn draw_list_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    footer: &str,
+    query_line: Option<Line<'static>>,
+    rows: Vec<Line<'static>>,
+    cursor: usize,
+) {
+    let hint_style = Style::new().fg(Color::Reset);
+    let top_left = Line::from(title.to_string());
+    let footer_line = Line::styled(footer.to_string(), hint_style).centered();
+
+    // Size the box to the widest of the query line / rows / chrome, clamped to the frame (mirrors
+    // the finder). The query line, when present, adds one interior row above the list.
+    let query_w = query_line.as_ref().map(Line::width).unwrap_or(0);
+    let max_row_w = rows.iter().map(Line::width).max().unwrap_or(0);
+    let desired_inner_w = query_w
+        .max(max_row_w)
+        .max(top_left.width())
+        .max(footer_line.width())
+        .min(u16::MAX as usize) as u16;
+    let query_rows: usize = if query_line.is_some() { 1 } else { 0 };
+    let desired_inner_h = (query_rows + rows.len()).min(u16::MAX as usize).max(1) as u16;
+    let want_w = desired_inner_w
+        .saturating_add(2)
+        .saturating_add(PICKER_PADDING * 2);
+    let want_h = desired_inner_h
+        .saturating_add(2)
+        .saturating_add(PICKER_PADDING * 2);
+    let cap_w = area.width.saturating_sub(2);
+    let cap_h = area.height.saturating_sub(2);
+    let popup = centered_rect_sized(want_w.min(cap_w), want_h.min(cap_h), area);
+
+    frame.render_widget(Clear, popup);
+    let block = modal_frame()
+        .title_top(top_left)
+        .title_bottom(footer_line)
+        .border_style(modal_border_style());
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    if inner.height == 0 {
+        return;
+    }
+    // The query line (when present) always occupies the first interior row; the rows fill the rest.
+    let rows_area = if let Some(query_line) = query_line {
+        let query_area = Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 1,
+        };
+        frame.render_widget(Paragraph::new(query_line), query_area);
+        Rect {
+            x: inner.x,
+            y: inner.y + 1,
+            width: inner.width,
+            height: inner.height.saturating_sub(1),
+        }
+    } else {
+        inner
+    };
+
+    if rows_area.height == 0 || rows.is_empty() {
+        return;
+    }
+    let visible = rows_area.height as usize;
+    let total = rows.len();
+    let offset = scroll_offset(cursor, total, visible);
+    let window: Vec<Line<'static>> = rows.into_iter().skip(offset).take(visible).collect();
+    frame.render_widget(Paragraph::new(window), rows_area);
+
+    // Vertical scrollbar when the rows overflow the visible height — tracks the cursor (like the
+    // finder/tree bars). Drawn into the last row column, mirroring the linknav/outline overlays.
+    if total > visible {
+        let sb_area = Rect {
+            x: rows_area.x + rows_area.width.saturating_sub(1),
+            y: rows_area.y,
+            width: 1,
+            height: rows_area.height,
+        };
+        let sb_state = scrollbar_state(total, cursor, visible);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .thumb_symbol("▐")
+                .track_symbol(None)
+                .begin_symbol(None)
+                .end_symbol(None),
+            sb_area,
+            &mut sb_state.clone(),
+        );
+    }
+}
+
+/// Draw the vault quick-switcher as a centered, bordered overlay (the `F` key): a query-input line
+/// (dim placeholder when empty) above the fuzzy-matched note rows, the `cursor` row REVERSED. Every
+/// row is run through `sanitize_control` (AC-27). Delegates layout to [`draw_list_overlay`].
+fn draw_quick_switcher_overlay(frame: &mut Frame, area: Rect, qs: &QuickSwitcherView) {
+    let query_line: Line<'static> = if qs.query.is_empty() {
+        Line::styled(
+            QUICK_SWITCHER_PLACEHOLDER.to_string(),
+            Style::new().add_modifier(Modifier::DIM),
+        )
+    } else {
+        Line::from(format!(
+            "{QUICK_SWITCHER_PROMPT}{}",
+            sanitize_control(&qs.query)
+        ))
+    };
+    let rows: Vec<Line<'static>> = qs
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(i, label)| {
+            let style = if i == qs.cursor {
+                Style::new().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::new()
+            };
+            Line::styled(sanitize_control(label), style)
+        })
+        .collect();
+    draw_list_overlay(
+        frame,
+        area,
+        QUICK_SWITCHER_TITLE,
+        QUICK_SWITCHER_FOOTER,
+        Some(query_line),
+        rows,
+        qs.cursor,
+    );
 }
 
 const ANNOTATION_OVERVIEW_FOOTER: &str =

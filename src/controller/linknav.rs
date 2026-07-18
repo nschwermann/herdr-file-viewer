@@ -265,6 +265,20 @@ impl Controller {
     /// queue a `pending_goto` scroll to that line (the exact mechanism go-to-line uses); otherwise
     /// render normally at the top. Best-effort: a missing anchor just opens the note at the top.
     fn after_nav_reveal(&mut self, abs: &Path, anchor: Option<&Anchor>) {
+        // Resolve the anchor to a 1-based source line (best-effort), then defer to the line-based
+        // variant so the anchor path and the direct-line path (outline / quick-switcher / global
+        // search hits) share one implementation.
+        let line = anchor.and_then(|a| self.anchor_line(abs, a));
+        self.after_nav_reveal_line(abs, line);
+    }
+
+    /// The line-parameterised form of [`after_nav_reveal`](Self::after_nav_reveal): the same
+    /// post-reveal wiring, but taking an already-resolved 1-based source `line` instead of an anchor.
+    /// When `line` is `Some`, open the note in the source-mapped view and queue a `pending_goto`
+    /// scroll to it (the exact mechanism go-to-line and the heading outline use); otherwise render at
+    /// the top. Shared by the wikilink navigator (anchor → line), the global content search (hit
+    /// line), and the note-opening confirms that jump to no particular line.
+    pub(super) fn after_nav_reveal_line(&mut self, abs: &Path, line: Option<usize>) {
         // reveal() may have relaxed the tree's changed_only/hide_hidden — re-sync the mirrors so a
         // later `c`/`.` toggle stays consistent (same as `confirm_finder`).
         self.changed_only = self.tree.changed_only();
@@ -278,12 +292,7 @@ impl Controller {
             self.zoomed = true;
             self.focus = Focus::Content;
         }
-        // Anchor scroll (best-effort): resolve the anchor to a 1-based source line, switch the note
-        // to the source-mapped view, and queue the jump for when that render lands (poll applies it
-        // via scroll_to_line — the same path go-to-line's auto-switch uses).
-        if let Some(anchor) = anchor
-            && let Some(line) = self.anchor_line(abs, anchor)
-        {
+        if let Some(line) = line {
             self.overrides
                 .insert(abs.to_path_buf(), ViewMode::SyntaxContent);
             self.dispatch_render();
@@ -291,6 +300,25 @@ impl Controller {
         } else {
             self.dispatch_render();
         }
+    }
+
+    /// Navigate the viewer to note `abs` in-viewer, recording the jump in the browser-style history:
+    /// reveal it in the tree, push the note being left onto the back-stack, clear the forward-stack (a
+    /// new branch abandons the old forward history), then wire up the reveal (optionally scrolling to
+    /// `line`). A vanished target sets a non-fatal notice and does not navigate. Shared by the
+    /// quick-switcher, the global content search, and the backlinks panel so all three feed the same
+    /// `[`/`]` history the wikilink navigator does. Read-only: it only moves the in-pane selection.
+    pub(super) fn navigate_to_note(&mut self, abs: &Path, line: Option<usize>) -> Effects {
+        if !self.tree.reveal(abs) {
+            self.action_notice = Some(format!("Could not open {}", self.nav_display_path(abs)));
+            return Effects::redraw();
+        }
+        if let Some(cur) = self.content_path.clone() {
+            self.nav_back.push(cur);
+        }
+        self.nav_forward.clear();
+        self.after_nav_reveal_line(abs, line);
+        Effects::redraw()
     }
 
     /// Resolve a link anchor to a 1-based source line in the target note (best-effort; `None` when

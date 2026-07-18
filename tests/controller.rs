@@ -10871,6 +10871,31 @@ impl ContentProvider for TagLineContent {
     }
 }
 
+// ---- Feature: vault quick-switcher (`F`) --------------------------------------------------
+
+/// Build a temp Obsidian vault (a `.obsidian/` dir) with the given `(rel, body)` notes, and a
+/// controller rooted at it with dotfiles hidden (so `.obsidian` isn't the cursor). Returns the dir
+/// (kept alive) and the controller.
+fn vault_controller(notes: &[(&str, &str)]) -> (TempDir, Controller) {
+    let dir = TempDir::new();
+    std::fs::create_dir_all(dir.path().join(".obsidian")).unwrap();
+    for (rel, body) in notes {
+        let p = dir.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+    }
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    ctrl.apply_hide_dotfiles(true);
+    (dir, ctrl)
+}
+
+/// Type each char of `q` into the quick-switcher (each a bare `Char` key).
+fn type_switcher(ctrl: &mut Controller, q: &str) {
+    for c in q.chars() {
+        ctrl.handle_quick_switcher_key(key(KeyCode::Char(c)));
+    }
+}
+
 #[test]
 fn clicking_a_tag_filters_the_tree_and_esc_clears_it() {
     // End-to-end: a rendered note shows a `#ryoshi-games` tag; a content click on it filters the
@@ -10944,5 +10969,98 @@ fn clicking_a_tag_filters_the_tree_and_esc_clears_it() {
     assert!(
         names(&ctrl).contains(&"Untagged.md".to_string()),
         "the full tree is restored after clearing"
+    );
+}
+
+#[test]
+fn quick_switcher_opens_in_vault_filters_by_name_and_confirms_opens_the_note() {
+    let (_dir, mut ctrl) = vault_controller(&[
+        ("Alpha.md", "# Alpha"),
+        ("Beta.md", "# Beta"),
+        ("sub/Gamma.md", "# Gamma"),
+    ]);
+
+    let fx = ctrl.handle(Intent::OpenQuickSwitcher);
+    assert!(
+        fx.redraw && ctrl.quick_switcher_open(),
+        "F opens the switcher in a vault"
+    );
+
+    // Empty query → no rows yet (matches only appear once the user types), like the finder.
+    assert!(
+        ctrl.view_state().quick_switcher.unwrap().rows.is_empty(),
+        "empty query shows no rows"
+    );
+
+    type_switcher(&mut ctrl, "Beta");
+    let qs = ctrl.view_state().quick_switcher.unwrap();
+    assert!(
+        qs.rows.iter().any(|r| r == "Beta"),
+        "typing 'Beta' surfaces the Beta note row: {:?}",
+        qs.rows
+    );
+
+    // Enter opens the highlighted note in-viewer and closes the overlay.
+    ctrl.handle_quick_switcher_key(key(KeyCode::Enter));
+    assert!(!ctrl.quick_switcher_open(), "Enter closes the switcher");
+    assert_eq!(
+        ctrl.tree().selected().unwrap().path.file_name().unwrap(),
+        "Beta.md",
+        "the tree reveals the chosen note"
+    );
+}
+
+#[test]
+fn quick_switcher_matches_by_frontmatter_alias() {
+    let (_dir, mut ctrl) = vault_controller(&[
+        ("Alpha.md", "# Alpha"),
+        ("Beta.md", "---\naliases:\n  - Nickname\n---\n# Beta"),
+    ]);
+    ctrl.handle(Intent::OpenQuickSwitcher);
+    type_switcher(&mut ctrl, "Nick");
+    let qs = ctrl.view_state().quick_switcher.unwrap();
+    assert!(
+        qs.rows.iter().any(|r| r.contains("Nickname")),
+        "the alias row surfaces for a name query: {:?}",
+        qs.rows
+    );
+    ctrl.handle_quick_switcher_key(key(KeyCode::Enter));
+    assert_eq!(
+        ctrl.tree().selected().unwrap().path.file_name().unwrap(),
+        "Beta.md",
+        "the alias row opens the note it aliases"
+    );
+}
+
+#[test]
+fn quick_switcher_notice_and_no_overlay_outside_a_vault() {
+    // A plain dir (no `.obsidian/` ancestor) → a notice, and the overlay does not open.
+    let dir = TempDir::new();
+    std::fs::write(dir.path().join("note.md"), "# hi").unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    let fx = ctrl.handle(Intent::OpenQuickSwitcher);
+    assert!(
+        fx.redraw && !ctrl.quick_switcher_open(),
+        "no vault → no overlay"
+    );
+    assert_eq!(
+        ctrl.action_notice(),
+        Some("Not in an Obsidian vault"),
+        "a guidance notice is shown"
+    );
+}
+
+#[test]
+fn quick_switcher_esc_closes_without_navigating() {
+    let (_dir, mut ctrl) = vault_controller(&[("Alpha.md", "# Alpha"), ("Beta.md", "# Beta")]);
+    let before = ctrl.tree().selected().unwrap().path;
+    ctrl.handle(Intent::OpenQuickSwitcher);
+    type_switcher(&mut ctrl, "Beta");
+    ctrl.handle_quick_switcher_key(key(KeyCode::Esc));
+    assert!(!ctrl.quick_switcher_open(), "Esc closes the switcher");
+    assert_eq!(
+        ctrl.tree().selected().unwrap().path,
+        before,
+        "Esc leaves the selection untouched"
     );
 }

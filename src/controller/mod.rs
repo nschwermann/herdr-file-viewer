@@ -31,6 +31,7 @@ mod linknav;
 mod mouse;
 mod outline;
 mod picker;
+mod switcher;
 mod tagfilter;
 
 use crate::annotation::AnnotationStore;
@@ -51,6 +52,7 @@ use crate::presenter::{
 };
 use crate::render::{Prepared, Renderers};
 use crate::root::Resolved;
+use crate::switcher::SwitcherState;
 use crate::tree::{Node, NodeKind, TreeModel};
 use crate::update::{self, UpdateState, Version};
 use crate::view_policy::{FileDescriptor, ViewMode, applicable_modes, default_mode};
@@ -324,6 +326,9 @@ enum Modal {
     /// The heading outline (the `o` key): a centered list of the current markdown note's headings,
     /// indented by level. Keyboard-only, like the prompt; a re-root resets it to `Modal::None`.
     Outline(OutlineState),
+    /// The vault quick-switcher (the `F` key): a query + fuzzy-ranked list of the containing vault's
+    /// notes (by name/alias). Keyboard-only, like the finder; a re-root resets it to `Modal::None`.
+    QuickSwitcher(SwitcherState),
     /// The confirm raised when an action would discard unexported annotations. Carries what to do
     /// once the user decides; the store it guards is the controller's.
     DiscardConfirm(DiscardAction),
@@ -469,6 +474,18 @@ impl Modal {
     fn outline_mut(&mut self) -> Option<&mut OutlineState> {
         match self {
             Modal::Outline(s) => Some(s),
+            _ => None,
+        }
+    }
+    fn quick_switcher(&self) -> Option<&SwitcherState> {
+        match self {
+            Modal::QuickSwitcher(s) => Some(s),
+            _ => None,
+        }
+    }
+    fn quick_switcher_mut(&mut self) -> Option<&mut SwitcherState> {
+        match self {
+            Modal::QuickSwitcher(s) => Some(s),
             _ => None,
         }
     }
@@ -754,6 +771,12 @@ pub struct Controller {
     /// tag filter is active. The source of truth for the tree-title indicator and the `Esc`
     /// clear-gesture; mirrors the tree's `tag_only` flag, which `reveal` can relax.
     active_tag: Option<String>,
+    /// The cached [`crate::vault_index::VaultIndex`] of the containing Obsidian vault, built lazily on
+    /// first use by the vault-navigation features (the quick-switcher and backlinks panel) and reused
+    /// while the vault is unchanged. `None` until first built, and reset on a re-root and on the `r`
+    /// refresh (so an out-of-band edit is picked up); keyed by vault root, so a different vault
+    /// rebuilds it. Session-only, in-memory (constitution: no persistent store).
+    vault_index: Option<crate::vault_index::VaultIndex>,
     /// The effective key -> intent bindings the run loop decodes against (Slice B, T-6): the
     /// keybinding registry resolved with the config's `[keys]` overrides (config > default).
     /// Initialized to [`default_bindings`](crate::input::default_bindings) so a controller always
@@ -884,6 +907,7 @@ impl Controller {
             nav_forward: Vec::new(),
             tag_index: None,
             active_tag: None,
+            vault_index: None,
             // Valid default bindings so the run loop can decode before (and if) `app::run` wires the
             // config's `[keys]` overrides via `set_keybindings`; tests inherit these unchanged.
             bindings: crate::input::default_bindings(),
@@ -1055,6 +1079,9 @@ impl Controller {
         // the title indicator and `Esc` clear-gesture reset too.
         self.active_tag = None;
         self.tag_index = None;
+        // The cached vault index belonged to the old root's vault — drop it so the next
+        // quick-switcher / backlinks use rebuilds against the new root's vault.
+        self.vault_index = None;
         // The old root's rendered content is invalid under the new root — drop the displayed-file
         // path so the title falls back to a neutral label until the new selection's render lands
         //. `dispatch_render` below sets `content_rendering` and the loading placeholder.
@@ -1635,6 +1662,7 @@ impl Controller {
             help: self.help_view(),
             link_nav: self.link_nav_view(),
             outline: self.outline_view(),
+            quick_switcher: self.quick_switcher_view(),
         }
     }
 
@@ -1765,6 +1793,12 @@ impl Controller {
         if self.modal.outline().is_some() {
             return Effects::noop();
         }
+        // The quick-switcher is modal too: the run loop routes raw keys to
+        // `handle_quick_switcher_key` while it is open, so `handle` should not be reached. Guard
+        // structurally — symmetric with the finder guard.
+        if self.modal.quick_switcher().is_some() {
+            return Effects::noop();
+        }
         match intent {
             Intent::NavUp => self.navigate(-1),
             Intent::NavDown => self.navigate(1),
@@ -1823,6 +1857,7 @@ impl Controller {
             },
             Intent::OpenLinkNav => self.open_link_nav(),
             Intent::OpenOutline => self.open_outline(),
+            Intent::OpenQuickSwitcher => self.open_quick_switcher(),
             Intent::NavBack => self.nav_back(),
             Intent::NavForward => self.nav_forward(),
             Intent::ShowHelp => self.open_help(),
@@ -2654,6 +2689,10 @@ impl Controller {
                 _ => self.clear_tag_filter_state(),
             }
         }
+        // Drop the cached vault index so a vault edited outside the viewer (a note added, a link or
+        // alias changed) is picked up on the next quick-switcher / backlinks use — `r` is the
+        // deliberate escape hatch for the index's full-scan, non-incremental freshness model.
+        self.vault_index = None;
         self.dispatch_render();
         Effects::redraw()
     }

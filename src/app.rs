@@ -397,6 +397,22 @@ fn event_loop(
                     }
                     dirty |= fx.redraw;
                 }
+                // While the vault quick-switcher is open, route every key press to
+                // `handle_quick_switcher_key` so printable keys edit the query instead of firing
+                // viewer intents (like the finder). Mutually exclusive with the other modal arms.
+                Event::Key(key)
+                    if key.kind == KeyEventKind::Press && controller.quick_switcher_open() =>
+                {
+                    let fx = controller.handle_quick_switcher_key(key);
+                    if fx.clear {
+                        let _ = terminal.clear();
+                        dirty = true;
+                    }
+                    if fx.quit {
+                        return Ok(()); // the quick-switcher never quits; harmless for symmetry
+                    }
+                    dirty |= fx.redraw;
+                }
                 // While a bottom prompt (go-to-line) is open, route every key press to handle_prompt_key so
                 // digits/printables edit the prompt instead of firing viewer intents (AC-21). Mutually exclusive
                 // with the finder arm above — only one modal is ever open.
