@@ -53,6 +53,23 @@ file-info placeholder (type/dimensions/size); it never crashes or emits raw esca
 terminal that can't render them. Detection is cheap and cached. Turn the whole feature off with
 `media_preview = false` in [config](configuration.md).
 
+### Running inside herdr
+
+Because the viewer runs as a pane inside herdr (a terminal multiplexer), **herdr** must forward the
+graphics to the outer terminal. herdr can, but it is **off by default** — enable it once in
+`~/.config/herdr/config.toml`:
+
+```toml
+[experimental]
+kitty_graphics = true   # render inline kitty graphics from panes to the outer terminal
+```
+
+Then apply it: `herdr server reload-config`, and **detach + reattach** (`prefix+q`, then `herdr`)
+so the change engages for the client (graphics are initialized per attached client). The outer
+terminal must itself be graphics-capable (Ghostty, kitty, WezTerm, …). Without this, the pane shows
+the metadata placeholder but no image. Run the viewer standalone (outside herdr) and the image
+renders with no extra setup.
+
 ### Bundled markdown palette
 
 The viewer ships a small bundled markdown style palette (`assets/markdown-style.json`) that
