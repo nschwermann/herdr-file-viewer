@@ -34,6 +34,8 @@ impl Controller {
             // The vault quick-switcher and global content search are keyboard-only too — swallow it.
             | Modal::QuickSwitcher(_)
             | Modal::GlobalSearch(_)
+            // The backlinks panel is keyboard-only (like the wikilink navigator) — swallow it.
+            | Modal::Backlinks(_)
             | Modal::DiscardConfirm(_) => Effects::noop(),
             Modal::LineSelect(_) => self.handle_line_select_mouse(ev),
             Modal::Help(_) => self.handle_help_mouse(ev),

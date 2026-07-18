@@ -5,6 +5,7 @@
 
 pub mod annotation;
 pub mod app;
+pub mod backlinks;
 pub mod config;
 pub mod context;
 pub mod controller;

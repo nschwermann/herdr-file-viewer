@@ -22,6 +22,7 @@
 //! the type definitions, construction, the intent/poll/render core, and tree-navigation intents.
 
 mod annotation;
+mod backlinks;
 mod finder;
 mod git_apply;
 mod globalsearch;
@@ -36,6 +37,7 @@ mod switcher;
 mod tagfilter;
 
 use crate::annotation::AnnotationStore;
+use crate::backlinks::{BacklinkItem, BacklinksState};
 use crate::finder::FinderState;
 use crate::git::{Baseline, Status};
 use crate::globalsearch::GlobalSearchState;
@@ -48,9 +50,9 @@ use crate::outline::{OutlineItem, OutlineState};
 use crate::picker::PickerState;
 use crate::presenter::{
     AnnotationEditorKind, AnnotationEditorView, AnnotationIndicatorsView, AnnotationOverviewView,
-    AnnotationRowView, AnnotationTargetView, CharSelView, ContentSearch, DiscardConfirmView,
-    FinderView, Focus, HelpView, LineSelectView, LinkNavRowView, LinkNavView, OutlineRowView,
-    OutlineView, PaneGeometry, PickerRowView, PickerView, ViewState,
+    AnnotationRowView, AnnotationTargetView, BacklinksView, CharSelView, ContentSearch,
+    DiscardConfirmView, FinderView, Focus, HelpView, LineSelectView, LinkNavRowView, LinkNavView,
+    OutlineRowView, OutlineView, PaneGeometry, PickerRowView, PickerView, ViewState,
 };
 use crate::render::{Prepared, Renderers};
 use crate::root::Resolved;
@@ -334,6 +336,10 @@ enum Modal {
     /// The vault global content search (the `S` key): a query + a list of note-content hits. Two-phase
     /// (Enter runs, then opens). Keyboard-only; a re-root resets it to `Modal::None`.
     GlobalSearch(GlobalSearchState),
+    /// The backlinks panel (the `G` key): a centered list of the notes that link *to* the current
+    /// markdown-in-vault note (the inbound mirror of the `g` wikilink navigator). Keyboard-only,
+    /// like the wikilink navigator; a re-root resets it to `Modal::None`.
+    Backlinks(BacklinksState),
     /// The confirm raised when an action would discard unexported annotations. Carries what to do
     /// once the user decides; the store it guards is the controller's.
     DiscardConfirm(DiscardAction),
@@ -503,6 +509,18 @@ impl Modal {
     fn global_search_mut(&mut self) -> Option<&mut GlobalSearchState> {
         match self {
             Modal::GlobalSearch(s) => Some(s),
+            _ => None,
+        }
+    }
+    fn backlinks(&self) -> Option<&BacklinksState> {
+        match self {
+            Modal::Backlinks(s) => Some(s),
+            _ => None,
+        }
+    }
+    fn backlinks_mut(&mut self) -> Option<&mut BacklinksState> {
+        match self {
+            Modal::Backlinks(s) => Some(s),
             _ => None,
         }
     }
@@ -1695,6 +1713,7 @@ impl Controller {
             outline: self.outline_view(),
             quick_switcher: self.quick_switcher_view(),
             global_search: self.global_search_view(),
+            backlinks: self.backlinks_view(),
         }
     }
 
@@ -1836,6 +1855,12 @@ impl Controller {
         if self.modal.global_search().is_some() {
             return Effects::noop();
         }
+        // The backlinks panel is modal too: the run loop routes raw keys to `handle_backlinks_key`
+        // while it is open, so `handle` should not be reached. Guard structurally — symmetric with
+        // the wikilink-navigator guard.
+        if self.modal.backlinks().is_some() {
+            return Effects::noop();
+        }
         match intent {
             Intent::NavUp => self.navigate(-1),
             Intent::NavDown => self.navigate(1),
@@ -1896,6 +1921,7 @@ impl Controller {
             Intent::OpenOutline => self.open_outline(),
             Intent::OpenQuickSwitcher => self.open_quick_switcher(),
             Intent::OpenGlobalSearch => self.open_global_search(),
+            Intent::OpenBacklinks => self.open_backlinks(),
             Intent::NavBack => self.nav_back(),
             Intent::NavForward => self.nav_forward(),
             Intent::ShowHelp => self.open_help(),

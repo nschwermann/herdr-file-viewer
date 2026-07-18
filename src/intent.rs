@@ -168,6 +168,14 @@ pub enum Intent {
     /// chosen one in-viewer at the matched line. Read-only navigation — it only moves the in-pane
     /// selection (AC-N1, AC-N3). Opens only inside a vault; otherwise it shows a notice.
     OpenGlobalSearch,
+    /// Open the backlinks panel (`G`) for the current markdown-in-vault note: a list of every other
+    /// note that links *to* it (a `[[wikilink]]` / `![[embed]]` / markdown link resolving to it),
+    /// computed as a reverse lookup over the cached vault index's resolved outgoing links. The
+    /// inbound mirror of [`Intent::OpenLinkNav`] (`g` = links out, `G` = links in). Read-only
+    /// navigation — following a backlink only moves the in-pane selection (AC-N1, AC-N3). Opens only
+    /// when the displayed file is a markdown note inside an Obsidian vault with at least one
+    /// backlink; otherwise it shows a notice and opens nothing.
+    OpenBacklinks,
     /// Close the viewer and return control to the prior pane (AC-20).
     Close,
 }
@@ -175,7 +183,7 @@ pub enum Intent {
 impl Intent {
     /// Every intent variant — lets the dispatcher and tests enumerate the closed set so
     /// keyboard-completeness (AC-18) and the no-file/git-mutation invariant (AC-N3) stay checkable.
-    pub const ALL: [Intent; 43] = [
+    pub const ALL: [Intent; 44] = [
         Intent::NavUp,
         Intent::NavDown,
         Intent::Expand,
@@ -217,6 +225,7 @@ impl Intent {
         Intent::NavForward,
         Intent::OpenQuickSwitcher,
         Intent::OpenGlobalSearch,
+        Intent::OpenBacklinks,
         Intent::ShowHelp,
         Intent::Close,
     ];
@@ -275,6 +284,7 @@ mod tests {
                 | Intent::NavForward
                 | Intent::OpenQuickSwitcher
                 | Intent::OpenGlobalSearch
+                | Intent::OpenBacklinks
                 | Intent::ShowHelp
                 | Intent::Close => (false, false),
             };
@@ -349,11 +359,19 @@ mod tests {
     }
 
     #[test]
-    fn all_length_is_43() {
+    fn all_length_is_44() {
         assert_eq!(
             Intent::ALL.len(),
-            43,
-            "Intent::ALL must have exactly 43 variants after adding OpenGlobalSearch"
+            44,
+            "Intent::ALL must have exactly 44 variants after adding OpenBacklinks"
+        );
+    }
+
+    #[test]
+    fn open_backlinks_is_in_all() {
+        assert!(
+            Intent::ALL.contains(&Intent::OpenBacklinks),
+            "Intent::ALL must contain OpenBacklinks"
         );
     }
 

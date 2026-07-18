@@ -416,6 +416,13 @@ pub(crate) const REGISTRY: &[Binding] = &[
         category: "Search & jump",
     },
     Binding {
+        intent: Intent::OpenBacklinks,
+        name: "backlinks",
+        default_keys: &[KeyCode::Char('G')],
+        description: "Open the backlinks panel (notes that link to the current note).",
+        category: "Search & jump",
+    },
+    Binding {
         intent: Intent::TreeScrollLeft,
         name: "tree_scroll_left",
         default_keys: &[KeyCode::Char('H')],
@@ -758,6 +765,7 @@ mod tests {
         (KeyCode::Char('o'), Intent::OpenOutline),
         (KeyCode::Char('F'), Intent::OpenQuickSwitcher),
         (KeyCode::Char('S'), Intent::OpenGlobalSearch),
+        (KeyCode::Char('G'), Intent::OpenBacklinks),
         (KeyCode::Char('['), Intent::NavBack),
         (KeyCode::Char(']'), Intent::NavForward),
         (KeyCode::Char('H'), Intent::TreeScrollLeft),

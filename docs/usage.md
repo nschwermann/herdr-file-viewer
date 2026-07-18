@@ -112,6 +112,28 @@ holds a `.obsidian/` folder), you can follow its links to other notes without le
 (Rendered markdown shows `[[…]]` as literal text — `glow` doesn't know Obsidian syntax — so use `g`
 rather than clicking to follow a link.)
 
+## Backlinks — what links here (Obsidian vaults)
+
+The inbound mirror of the link navigator: where `g` lists the links **out** of the current note,
+`G` lists the notes that link **in** to it.
+
+When you are viewing a markdown note inside an Obsidian vault, press `G` (Shift+`g`) to open the
+**backlinks panel** — a centered list of **every other note that links to this one** (a
+`[[wikilink]]`, `![[embed]]`, or relative markdown link anywhere in the vault that resolves to the
+current note). Move with `↑` / `↓` or `j` / `k`, press `Enter` to open the selected note in-viewer,
+and `Esc` / `q` to close.
+
+- Backlinks are computed as a **reverse lookup** over the same cached vault index the
+  [quick-switcher](#quick-switch-to-any-note-obsidian-vaults) uses: each note's outgoing links are
+  resolved once (vault-wide, the Obsidian way), and the panel lists the notes whose resolved links
+  include the one you are reading. A note's link to **itself** never counts.
+- Following a backlink records the jump in the same `[` / `]` back / forward history the link
+  navigator does, so you can step back to where you came from.
+- If the file is not a markdown note in a vault, or nothing links to it, a short notice is shown and
+  nothing opens.
+- The index is a full, read-only scan taken once and cached; a note added or a link changed **outside**
+  the viewer is picked up on the next **refresh** (`r`) or worktree switch.
+
 ## Filtering the tree by tag (Obsidian vaults)
 
 In a rendered note, **click a `#tag`** — a chip in the frontmatter [Properties panel](#obsidian-markdown-rendering)

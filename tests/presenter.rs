@@ -110,6 +110,7 @@ fn sample_state() -> ViewState {
         outline: None,
         quick_switcher: None,
         global_search: None,
+        backlinks: None,
     }
 }
 

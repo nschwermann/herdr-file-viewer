@@ -259,3 +259,110 @@ Layout degrades gracefully on a narrow pane: it drops the least-important chip f
   degradation) in `tests/presenter.rs`; link-count cache + click→cycle / click→link-nav routing in
   `tests/controller.rs`. Full suite green except the one known-flaky e2e search test (fails on the
   base commit too).
+
+---
+
+> **Shared vault plumbing for the three sections below (F, S, G).** The quick-switcher (`F`) and the
+> backlinks panel (`G`) both read a **cached vault index** — a one-shot, read-only scan of the
+> containing Obsidian vault (every `.md` note keyed by name/alias, plus each note's resolved outgoing
+> links). It's built lazily on first use and **reused** until you re-root or press **`r`** (refresh).
+> So if you add a note, alias, or link **outside** the viewer, press **`r`** to pick it up. Vault
+> content search (`S`) shells out to **ripgrep** (`rg`) when it's on `PATH`, and falls back to a
+> pure-Rust scan when it isn't — so it always works, `rg` just makes it faster. All three are
+> **read-only** and **keyboard-only** modals (the mouse is swallowed while they're open), and all
+> three gate on being **inside an Obsidian vault** (a `.obsidian/` ancestor).
+
+## Quick-switcher (F)
+
+**What changed:** press **`F`** (Shift+`f`) to open a **fuzzy note switcher** over **every note in
+the containing vault** — Obsidian's ⌘O. Type to filter by note **name** *or* frontmatter **alias**;
+`↑`/`↓` move the selection, `Enter` opens the chosen note in the viewer (and records it in the
+`[`/`]` back/forward history, same as the `g` link navigator), `Esc` cancels. This is distinct from
+lowercase **`f`** (go-to-**file**, which fuzzy-finds the *repo's* files by path) — `F` finds vault
+**notes** by name/alias, vault-wide. Cherry-picked tonight.
+
+**How to test (Ghostty):**
+1. Refresh the plugin: `cd ~/Workspace/herdr-file-viewer && cargo build --release`, then close the
+   viewer pane (`q`) and reopen it (`Ctrl+Space f`).
+2. Open **any note inside your Brain vault** (so the current selection is under a `.obsidian/` root).
+3. Press **`F`**. A centered "Switch note" box opens with an empty query.
+4. Type part of **another** note's name — e.g. a few letters of a note you know exists. The list
+   fuzzy-filters as you type. Press `↑`/`↓` to move, then **`Enter`** — that note opens in the
+   content pane.
+5. Press **`[`** to jump back to where you were, **`]`** to go forward again.
+6. Try typing part of a note's **alias** (a name under `aliases:` in its frontmatter) instead of its
+   filename — it should still surface that note (the row shows `alias  ·  note`).
+7. Edge check: press `F` on a file/dir **not** inside a vault → a `Not in an Obsidian vault` notice,
+   no overlay. Empty query shows **no rows** (matches appear once you type), exactly like `f`.
+
+**Notes:** backed by the shared cached vault index (see the box above) — press **`r`** if you added a
+note outside the viewer and it's not showing.
+
+## Global content search (S)
+
+**What changed:** press **`S`** (Shift+`s`) to **search the text of every note in the vault** —
+Obsidian's global search. It's **two-phase**: type a query and press **`Enter`** to *run* the search,
+then `↑`/`↓` move through the hits (each row is `note:line` + a preview of the matched line) and
+**`Enter`** on a hit *opens* that note in the viewer, **scrolled to the matched line**. Editing the
+query and pressing `Enter` again re-runs it; `Esc` closes. Matching is **literal + smartcase** (a
+lowercase query is case-insensitive; any uppercase makes it case-sensitive) — the same rule as the
+in-file `/` search. Distinct from **`/`**, which searches *within the currently open file*.
+Cherry-picked tonight.
+
+**How to test (Ghostty):**
+1. Refresh the plugin (as above) and open any note inside your vault.
+2. Press **`S`**. A centered "Search vault" box opens.
+3. Type a **phrase you know appears** in one or more notes (e.g. a project name or a distinctive
+   word), then press **`Enter`** to run the search.
+4. The box fills with `note:line` hits + previews. Move with `↑`/`↓` and press **`Enter`** on one —
+   that note opens in the content pane, scrolled to the matched line.
+5. Edit the query (backspace + retype) and press `Enter` again to re-run. `Esc` closes.
+6. Edge check: press `S` outside a vault → `Not in an Obsidian vault` notice, no overlay.
+
+**Prerequisite / fallback:** if **ripgrep** (`rg`) is on your `PATH` the search uses it (fast, and it
+respects the vault's `.gitignore` and skips hidden dirs like `.obsidian`/`.trash`). If `rg` is
+**not** installed, a built-in **pure-Rust fallback** scans the vault's markdown files instead — so the
+feature works either way; `rg` just makes it faster. (`which rg` to check; `brew install ripgrep` if
+you want the fast path.)
+
+## Backlinks panel (G)  ← tonight's new feature
+
+**What changed:** press **`G`** (Shift+`g`) on a markdown note inside a vault to open the **backlinks
+panel** — "what links here": a list of **every *other* note that links *to* the current note** (a
+`[[wikilink]]`, `![[embed]]`, or markdown link anywhere in the vault that resolves to this note).
+`↑`/`↓` or `j`/`k` move, **`Enter`** opens the selected linking note in the viewer (keeping the
+`[`/`]` back/forward history), `Esc`/`q` closes. It's the **inbound mirror of `g`**: where `g` lists
+the links **out** of the note you're reading, `G` lists the notes that link **in**. A note's link to
+**itself** never counts. This is the feature I built tonight (the rest were cherry-picked).
+
+**How to test (Ghostty):**
+1. Refresh the plugin (as above).
+2. Open a **hub note** — one you know several other notes link to (e.g. a MOC / index note, or any
+   note whose name you've `[[wikilinked]]` from a few places). Make sure the viewer is rooted inside
+   the vault so those linking notes are in scope.
+3. Press **`G`**. A centered "Backlinks" box lists the notes that link to this one.
+4. Move with `↑`/`↓` (or `j`/`k`) and press **`Enter`** — that linking note opens in the content pane.
+   Press **`[`** to jump back to the hub note.
+5. Edge checks:
+   - Open a note that **nothing** links to → pressing `G` shows a `No backlinks to this note` notice,
+     no overlay.
+   - Press `G` on a **non-markdown** file, or a markdown note **not** in a vault → a
+     `No backlinks: open a markdown note in an Obsidian vault` notice.
+6. If you `[[link]]` to the hub from a new note **outside** the viewer, press **`r`** (refresh) first,
+   then `G` — the new backlink appears (the index is a cached full-scan; `r` is the refresh hatch).
+
+**Decisions / notes:**
+- Backlinks are a **reverse lookup** over the **same cached vault index** the quick-switcher (`F`)
+  builds — each note's outgoing links are resolved once (vault-wide, shortest-unique-path, the
+  Obsidian way), and `G` lists the notes whose resolved links include the current one. No new scan,
+  no new crate.
+- Following a backlink reuses the exact `navigate_to_note` primitive `F` and the `g`/click link
+  paths use, so it feeds the **same `[`/`]` history** and reveal/render behaviour — consistent with
+  the rest of the vault navigation.
+- Key choice: **`G`** (Shift+`g`) as the mnemonic mirror of `g` (out) ↔ `G` (in). `G` was free.
+  Remap it via `[keys]` with the intent name **`backlinks`** if you prefer.
+- **Tests:** state-model unit tests (`src/backlinks.rs`), a reverse-lookup test already in
+  `src/vault_index.rs`, and six controller tests (open/gate on non-vault + non-markdown, the
+  self-link/non-linker exclusion, follow-and-`[`-back, the no-backlinks notice, and `Esc` closes) in
+  `tests/controller.rs`. Full suite green except the one known-flaky e2e search test (fails on the
+  base commit too).

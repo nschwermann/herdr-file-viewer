@@ -182,6 +182,10 @@ pub struct ViewState {
     /// When `Some`, the vault global content-search overlay is drawn on top of the columns (the `S`
     /// key). `None` ⇒ no overlay. A query + a list of note-content hits.
     pub global_search: Option<GlobalSearchView>,
+    /// When `Some`, the backlinks panel is drawn on top of the columns (the `G` key). `None` ⇒ no
+    /// overlay. A list of the notes that link *to* the current note (the inbound mirror of the `g`
+    /// wikilink navigator).
+    pub backlinks: Option<BacklinksView>,
 }
 
 /// The worktree picker's draw model (an owned snapshot of the controller's picker state, so
@@ -312,6 +316,17 @@ pub struct OutlineRowView {
     pub text: String,
     /// The ATX heading level 1..=6 — drives the row's indent (level-1 steps).
     pub level: u8,
+}
+
+/// The backlinks-panel overlay's draw model (an owned snapshot of the controller's
+/// [`crate::backlinks::BacklinksState`], so the Presenter stays borrow-free). Built by the Session
+/// Controller's `view_state()`. Mirrors [`LinkNavView`], but simpler — every row is a resolved
+/// note, so there is no query and no unresolved marker.
+pub struct BacklinksView {
+    /// The linking-note display labels, in walk order. Sanitized at draw for AC-27.
+    pub rows: Vec<String>,
+    /// Index into `rows` of the highlighted row.
+    pub cursor: usize,
 }
 
 /// The quick-switcher overlay's draw model — a query line plus fuzzy-matched vault-note rows (an
@@ -1745,6 +1760,10 @@ pub fn draw(frame: &mut Frame, state: &ViewState) -> (u16, u16) {
     if let Some(gs) = &state.global_search {
         draw_global_search_overlay(frame, frame.area(), gs);
     }
+    // The backlinks panel is also a modal overlay (keyboard-only). Only one modal is ever open.
+    if let Some(bl) = &state.backlinks {
+        draw_backlinks_overlay(frame, frame.area(), bl);
+    }
     // Annotation modals are keyboard-only overlays. They add no hit-test geometry; their owned,
     // typed draw models contain raw fields and the Presenter formats/sanitizes them here.
     if let Some(overview) = &state.annotation_overview {
@@ -2094,6 +2113,12 @@ const OUTLINE_TITLE: &str = "Outline";
 const OUTLINE_FOOTER_HINT: &str = "↑↓/j/k move · ⏎ jump · esc close";
 /// How many leading spaces one heading level adds to a row's indent, so the hierarchy reads.
 const OUTLINE_INDENT_STEP: usize = 2;
+
+/// The backlinks-panel overlay's top-left title (the box label).
+const BACKLINKS_TITLE: &str = "Backlinks";
+/// The backlinks-panel overlay's key-hint footer on the bottom border — its real bindings, with
+/// herdr's ` · ` separator. Static (not repo-derived), so no sanitization is needed.
+const BACKLINKS_FOOTER_HINT: &str = "↑↓/j/k move · ⏎ open · esc close";
 
 /// The help overlay's top-left title (the box label).
 const HELP_TITLE: &str = "Help";
@@ -2531,6 +2556,86 @@ fn draw_outline_overlay(frame: &mut Frame, area: Rect, outline: &OutlineView) {
             height: inner.height,
         };
         let sb_state = scrollbar_state(outline.rows.len(), outline.cursor, visible);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .thumb_symbol("▐")
+                .track_symbol(None)
+                .begin_symbol(None)
+                .end_symbol(None),
+            sb_area,
+            &mut sb_state.clone(),
+        );
+    }
+}
+
+/// Draw the backlinks panel as a centered, size-to-content list of the notes that link to the
+/// current one (the `G` key). A keyboard-only modal, so — like the wikilink navigator / outline —
+/// it feeds back no hit-test geometry: the sizing/centering/scroll math lives here alone. Each row
+/// shows a linking note's display label, run through `sanitize_control` (AC-27); the `cursor` row
+/// is highlighted REVERSED, the same idiom the finder/picker use. Mirrors `draw_outline_overlay`,
+/// minus the level indent (every row is a plain note label).
+fn draw_backlinks_overlay(frame: &mut Frame, area: Rect, backlinks: &BacklinksView) {
+    let rows: Vec<Line<'static>> = backlinks
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let base = if i == backlinks.cursor {
+                Style::new().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::new()
+            };
+            Line::from(Span::styled(sanitize_control(row), base))
+        })
+        .collect();
+
+    let hint_style = Style::new().fg(Color::Reset);
+    let top_left = Line::from(BACKLINKS_TITLE);
+    let footer = Line::styled(BACKLINKS_FOOTER_HINT, hint_style).centered();
+
+    // Size the box to the widest row / the chrome, clamped to the frame (mirrors the finder).
+    let max_row_w = rows.iter().map(Line::width).max().unwrap_or(0);
+    let desired_inner_w = max_row_w
+        .max(top_left.width())
+        .max(footer.width())
+        .min(u16::MAX as usize) as u16;
+    let desired_inner_h = (rows.len().min(u16::MAX as usize) as u16).max(1);
+    let want_w = desired_inner_w
+        .saturating_add(2)
+        .saturating_add(PICKER_PADDING * 2);
+    let want_h = desired_inner_h
+        .saturating_add(2)
+        .saturating_add(PICKER_PADDING * 2);
+    let cap_w = area.width.saturating_sub(2);
+    let cap_h = area.height.saturating_sub(2);
+    let popup = centered_rect_sized(want_w.min(cap_w), want_h.min(cap_h), area);
+
+    frame.render_widget(Clear, popup);
+    let block = modal_frame()
+        .title_top(top_left)
+        .title_bottom(footer)
+        .border_style(modal_border_style());
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    if inner.height == 0 || rows.is_empty() {
+        return;
+    }
+    let visible = inner.height as usize;
+    let offset = scroll_offset(backlinks.cursor, rows.len(), visible);
+    let window: Vec<Line<'static>> = rows.into_iter().skip(offset).take(visible).collect();
+    frame.render_widget(Paragraph::new(window), inner);
+
+    // Vertical scrollbar when the rows overflow the visible height. It tracks the cursor (not the
+    // viewport offset) so the thumb follows the selection, like the finder/tree bars.
+    if backlinks.rows.len() > visible {
+        let sb_area = Rect {
+            x: inner.x + inner.width.saturating_sub(1),
+            y: inner.y,
+            width: 1,
+            height: inner.height,
+        };
+        let sb_state = scrollbar_state(backlinks.rows.len(), backlinks.cursor, visible);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .thumb_symbol("▐")

@@ -11185,3 +11185,161 @@ fn global_search_esc_closes() {
     ctrl.handle_global_search_key(key(KeyCode::Esc));
     assert!(!ctrl.global_search_open(), "Esc closes the search");
 }
+
+// ---- Feature: backlinks panel (`G`) -------------------------------------------------------
+
+/// Build a temp Obsidian vault with the given notes, a controller rooted at it (dotfiles hidden,
+/// a content column visible), and the selection settled on `hub` so `content_path` is that note.
+fn backlinks_vault(notes: &[(&str, &str)], hub: &str) -> (TempDir, Controller) {
+    let (dir, mut ctrl) = vault_controller(notes);
+    ctrl.set_content_viewport(60, 20); // a content column is visible (no forced zoom)
+    let path = dir.path().join(hub);
+    let name = Path::new(hub).file_name().unwrap().to_str().unwrap();
+    select_and_settle(&mut ctrl, &path, name);
+    (dir, ctrl)
+}
+
+#[test]
+fn g_capital_lists_backlinks_excluding_self_and_non_linkers() {
+    // Hub is linked to by A (`[[Hub]]`) and B (`[[Hub|shown]]`), links to itself (a self-link that
+    // must NOT count), and C does not link to it. The panel lists exactly A and B.
+    let (_dir, mut ctrl) = backlinks_vault(
+        &[
+            ("Hub.md", "I mention [[Hub]] myself\n"),
+            ("A.md", "see [[Hub]]\n"),
+            ("B.md", "also [[Hub|shown]]\n"),
+            ("C.md", "no link here\n"),
+        ],
+        "Hub.md",
+    );
+
+    let fx = ctrl.handle(Intent::OpenBacklinks);
+    assert!(fx.redraw);
+    assert!(
+        ctrl.backlinks_open(),
+        "G opens the backlinks panel on a vault note"
+    );
+
+    let mut rows = ctrl
+        .view_state()
+        .backlinks
+        .expect("backlinks view present")
+        .rows;
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec!["A".to_string(), "B".to_string()],
+        "A and B link to Hub; Hub's self-link and the non-linking C are excluded"
+    );
+}
+
+#[test]
+fn following_a_backlink_opens_the_note_and_back_returns_to_the_hub() {
+    // A single backlink (A → Hub) so the followed row is deterministic. Enter opens A in-viewer and
+    // records the jump; `[` returns to Hub (the shared back/forward history).
+    let (dir, mut ctrl) = backlinks_vault(
+        &[("Hub.md", "# Hub\n"), ("A.md", "see [[Hub]]\n")],
+        "Hub.md",
+    );
+    let hub = dir.path().join("Hub.md");
+    let a = dir.path().join("A.md");
+
+    ctrl.handle(Intent::OpenBacklinks);
+    let fx = ctrl.handle_backlinks_key(key(KeyCode::Enter));
+    assert!(fx.redraw);
+    assert!(
+        !ctrl.backlinks_open(),
+        "following a backlink closes the panel"
+    );
+    assert_eq!(
+        selected_path(&ctrl).as_deref(),
+        Some(a.as_path()),
+        "the displayed file moved to the linking note"
+    );
+    await_content_title(&mut ctrl, "A.md");
+
+    // `[` goes back to Hub.md — the follow fed the same history the wikilink navigator uses.
+    ctrl.handle(Intent::NavBack);
+    assert_eq!(
+        selected_path(&ctrl).as_deref(),
+        Some(hub.as_path()),
+        "`[` returns to the note the backlink was opened from"
+    );
+}
+
+#[test]
+fn backlinks_notice_and_no_overlay_outside_a_vault() {
+    // A plain (non-vault) dir: a note that is linked to, but no `.obsidian/` ancestor — G gates.
+    let dir = TempDir::new();
+    std::fs::write(dir.path().join("Hub.md"), "# Hub\n").unwrap();
+    std::fs::write(dir.path().join("A.md"), "see [[Hub]]\n").unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    let hub = dir.path().join("Hub.md");
+    select_and_settle(&mut ctrl, &hub, "Hub.md");
+
+    let fx = ctrl.handle(Intent::OpenBacklinks);
+    assert!(fx.redraw && !ctrl.backlinks_open(), "no vault → no panel");
+    assert!(
+        ctrl.action_notice()
+            .unwrap_or("")
+            .contains("Obsidian vault"),
+        "a guidance notice is shown, got: {:?}",
+        ctrl.action_notice()
+    );
+}
+
+#[test]
+fn backlinks_notice_when_nothing_links_here() {
+    // Lonely is a real vault note that nothing links to → a distinct "no backlinks" notice, no panel.
+    let (_dir, mut ctrl) = backlinks_vault(
+        &[("Lonely.md", "# Lonely\n"), ("Other.md", "no link here\n")],
+        "Lonely.md",
+    );
+
+    let fx = ctrl.handle(Intent::OpenBacklinks);
+    assert!(
+        fx.redraw && !ctrl.backlinks_open(),
+        "no inbound links → the panel does not open"
+    );
+    assert!(
+        ctrl.action_notice()
+            .unwrap_or("")
+            .contains("No backlinks to this note"),
+        "the no-backlinks notice is shown, got: {:?}",
+        ctrl.action_notice()
+    );
+}
+
+#[test]
+fn g_capital_on_non_markdown_in_vault_notices_and_does_not_open() {
+    let dir = TempDir::new();
+    std::fs::create_dir(dir.path().join(".obsidian")).unwrap();
+    std::fs::write(dir.path().join("notes.txt"), "plain\n").unwrap();
+    std::fs::write(dir.path().join("A.md"), "see [[notes]]\n").unwrap();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    let txt = dir.path().join("notes.txt");
+    select_and_settle(&mut ctrl, &txt, "notes.txt");
+
+    ctrl.handle(Intent::OpenBacklinks);
+    assert!(
+        !ctrl.backlinks_open(),
+        "a non-markdown file never opens the backlinks panel"
+    );
+}
+
+#[test]
+fn backlinks_esc_closes_without_navigating() {
+    let (dir, mut ctrl) = backlinks_vault(
+        &[("Hub.md", "# Hub\n"), ("A.md", "see [[Hub]]\n")],
+        "Hub.md",
+    );
+    let hub = dir.path().join("Hub.md");
+    ctrl.handle(Intent::OpenBacklinks);
+    ctrl.handle_backlinks_key(key(KeyCode::Esc));
+    assert!(!ctrl.backlinks_open(), "Esc closes the panel");
+    assert_eq!(
+        selected_path(&ctrl).as_deref(),
+        Some(hub.as_path()),
+        "Esc does not move the selection"
+    );
+}

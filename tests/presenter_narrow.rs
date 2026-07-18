@@ -73,6 +73,7 @@ fn state(width: u16, focus: Focus) -> ViewState {
         outline: None,
         quick_switcher: None,
         global_search: None,
+        backlinks: None,
     }
 }
 
