@@ -5,7 +5,11 @@ All notable changes to this project are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries are short on purpose; follow the
 `→` links for the full detail.
 
-## [Unreleased]
+## [2.0.0] - 2026-07-17
+
+This is the first release of the **`nschwermann` fork** (the Obsidian media & vault suite). The
+version is bumped to a fork-distinct `2.0.0` so `herdr plugin install` builds it from source
+instead of fetching a same-versioned upstream prebuilt binary.
 
 ### Added
 - **Inline image/video preview** in the content pane: selecting an image (or video) auto-displays it inline — scaled to fit, with type/dimensions/size shown above — the moment it's highlighted, no keypress. Images are decoded and encoded **in-process** via [`ratatui-image`](https://crates.io/crates/ratatui-image) (kitty/sixel/iterm2), so **no external image CLI is needed**; a video uses an `ffmpeg` poster frame. `Enter`/`z` zoom the pane larger. Falls back to the file-info placeholder — never escape garbage — on a terminal with no graphics protocol; toggle with `media_preview = false`. → [renderers](docs/renderers.md#inline-image--video-preview)
