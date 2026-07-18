@@ -57,6 +57,7 @@ impl ContentProvider for Lines {
             .map(|line| format!("line {line}"))
             .collect::<Vec<_>>();
         RenderResult {
+            embeds: Vec::new(),
             content: Text::raw(lines.join("\n")),
             notices: Vec::new(),
             source: self.source_mapped.then_some(lines),

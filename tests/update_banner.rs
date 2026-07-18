@@ -41,6 +41,7 @@ impl ContentProvider for Content {
             content: Text::raw(""),
             notices: Vec::new(),
             source: None,
+            embeds: Vec::new(),
         }
     }
 }

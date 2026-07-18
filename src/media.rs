@@ -69,6 +69,18 @@ pub struct InlineMedia {
     pub header_rows: u16,
 }
 
+/// A resolved inline **image embed** within a rendered markdown note (`![[img|w]]` / `![](path)`):
+/// which display line its reserved band starts at, the image file, and the band size in cells. The
+/// app's `MediaPane` paints the image over the band `[content_line, content_line + rows)` when that
+/// band is within the content viewport (scroll-aware). Produced by the render worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaEmbed {
+    pub content_line: usize,
+    pub path: PathBuf,
+    pub cols: u16,
+    pub rows: u16,
+}
+
 /// Which media class a file is, by extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaKind {

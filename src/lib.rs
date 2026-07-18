@@ -22,6 +22,7 @@ pub mod input;
 pub mod intent;
 pub mod launch;
 pub mod linknav;
+pub mod mdembed;
 pub mod mdnote;
 pub mod media;
 pub mod obsidian;

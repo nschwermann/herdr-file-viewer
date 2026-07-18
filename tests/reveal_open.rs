@@ -74,6 +74,7 @@ impl ContentProvider for StubContent {
             content: Text::raw("stub"),
             notices: Vec::new(),
             source: None,
+            embeds: Vec::new(),
         }
     }
 }

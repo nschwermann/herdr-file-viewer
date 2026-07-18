@@ -225,6 +225,84 @@ pub fn resolve_target(target: &str, source_rel: &Path, index: &[PathBuf]) -> Opt
     matches.first().map(|p| (*p).clone())
 }
 
+/// Resolve an image/attachment embed target to an **absolute** file path. `note` is the markdown
+/// file the embed lives in. Tries note-relative first (handles a standard `![](sub/pic.png)` and a
+/// same-folder `![[pic.png]]`); for a wiki embed that misses, resolves it the Obsidian way — search
+/// the whole vault for a file with that name, shortest path winning. `max_files` bounds that walk.
+/// Returns `None` when nothing matches. Read-only (a bounded `read_dir` walk + `is_file`).
+pub fn find_attachment(note: &Path, target: &str, wiki: bool, max_files: usize) -> Option<PathBuf> {
+    let target = target.trim();
+    if target.is_empty() {
+        return None;
+    }
+    // 1) Note-relative (covers standard markdown images and same-folder wiki embeds).
+    if let Some(dir) = note.parent() {
+        let rel = dir.join(target);
+        if rel.is_file() {
+            return Some(rel);
+        }
+    }
+    // 2) Wiki embeds resolve vault-wide.
+    if wiki && let Some(vault) = find_vault(note) {
+        let vabs = vault.root.join(target);
+        if vabs.is_file() {
+            return Some(vabs);
+        }
+        return find_file_by_name(&vault.root, target, max_files);
+    }
+    None
+}
+
+/// Find the file in `vault_root` whose file name equals `name`'s basename (case-insensitive),
+/// preferring the shortest vault-relative path (fewest components), then lexicographic. A bounded,
+/// dotdir-skipping walk mirroring [`markdown_index`]. Returns an absolute path.
+fn find_file_by_name(vault_root: &Path, name: &str, max_files: usize) -> Option<PathBuf> {
+    let needle = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(name)
+        .to_lowercase();
+    if needle.is_empty() {
+        return None;
+    }
+    let mut best: Option<PathBuf> = None;
+    let mut best_key: Option<(usize, std::ffi::OsString)> = None;
+    let mut seen = 0usize;
+    let mut stack = vec![vault_root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if seen >= max_files {
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let ename = entry.file_name();
+            if ename.to_string_lossy().starts_with('.') {
+                continue;
+            }
+            match entry.file_type() {
+                Ok(ft) if ft.is_dir() => stack.push(path),
+                Ok(ft) if ft.is_file() => {
+                    seen += 1;
+                    if ename.to_string_lossy().to_lowercase() != needle {
+                        continue;
+                    }
+                    let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+                    let key = (rel.components().count(), rel.as_os_str().to_os_string());
+                    if best_key.as_ref().is_none_or(|b| key < *b) {
+                        best_key = Some(key);
+                        best = Some(path.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    best
+}
+
 /// Lower-case and normalise separators for a lenient, case-insensitive path comparison (Obsidian
 /// treats links case-insensitively on the common platforms). Also strips a leading `./`.
 fn normalize_link_path(s: &str) -> String {

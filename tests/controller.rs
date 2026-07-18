@@ -67,6 +67,7 @@ struct StubContent;
 impl ContentProvider for StubContent {
     fn render(&self, _path: &Path, _mode: ViewMode, _raw_diff: Option<&str>) -> RenderResult {
         RenderResult {
+            embeds: Vec::new(),
             content: Text::raw("stub-content"),
             notices: Vec::new(),
             source: None,
@@ -86,6 +87,7 @@ impl ContentProvider for DelayedNamedContent {
         std::thread::sleep(self.delay);
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         RenderResult {
+            embeds: Vec::new(),
             content: Text::raw(format!("BODY-OF:{name}")),
             notices: Vec::new(),
             source: None,
@@ -889,6 +891,7 @@ impl ContentProvider for LinesContent {
             .collect::<Vec<_>>()
             .join("\n");
         RenderResult {
+            embeds: Vec::new(),
             content: Text::raw(body),
             notices: Vec::new(),
             source: None,
@@ -904,6 +907,7 @@ impl ContentProvider for WideContent {
         let line = format!("WIDE{}", "x".repeat(96)); // 100 columns
         let body = std::iter::repeat_n(line, 5).collect::<Vec<_>>().join("\n");
         RenderResult {
+            embeds: Vec::new(),
             content: Text::raw(body),
             notices: Vec::new(),
             source: None,
@@ -2786,6 +2790,7 @@ struct PathContent;
 impl ContentProvider for PathContent {
     fn render(&self, path: &Path, _m: ViewMode, _d: Option<&str>) -> RenderResult {
         RenderResult {
+            embeds: Vec::new(),
             content: Text::raw(format!("showing {}", path.display())),
             notices: Vec::new(),
             source: None,
@@ -6731,6 +6736,7 @@ impl ContentProvider for WrapLines {
         let mut lines: Vec<String> = (0..5).map(|i| format!("W{i}{}", "x".repeat(23))).collect();
         lines.extend((5..10).map(|i| format!("S{i}")));
         RenderResult {
+            embeds: Vec::new(),
             content: Text::raw(lines.join("\n")),
             notices: Vec::new(),
             source: None,
@@ -7041,6 +7047,7 @@ impl ContentProvider for SearchContent {
             })
             .collect();
         RenderResult {
+            embeds: Vec::new(),
             content: Text::raw(lines.join("\n")),
             notices: Vec::new(),
             source: None,
@@ -7757,6 +7764,7 @@ impl ContentProvider for SwitchingContent {
             (0..10).map(|i| format!("other{i}")).collect()
         };
         RenderResult {
+            embeds: Vec::new(),
             content: Text::raw(lines.join("\n")),
             notices: Vec::new(),
             source: None,
@@ -8011,6 +8019,7 @@ impl ContentProvider for ContentWithoutSentinel {
     fn render(&self, _path: &Path, _mode: ViewMode, _raw_diff: Option<&str>) -> RenderResult {
         let lines = "alpha\nbeta\ngamma\ndelta\nepsilon\n";
         RenderResult {
+            embeds: Vec::new(),
             content: Text::raw(lines),
             notices: Vec::new(),
             source: None,

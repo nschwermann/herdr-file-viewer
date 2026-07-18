@@ -126,6 +126,7 @@ impl ContentProvider for SearchContent {
             content: Text::raw(lines.join("\n")),
             notices: Vec::new(),
             source: None,
+            embeds: Vec::new(),
         }
     }
 }
@@ -150,6 +151,7 @@ impl ContentProvider for TruncatedContent {
             content: Text::raw(shown.join("\n")),
             notices: Vec::new(),
             source: None,
+            embeds: Vec::new(),
         }
     }
 }

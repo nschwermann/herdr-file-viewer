@@ -66,6 +66,7 @@ struct FakeContent;
 impl ContentProvider for FakeContent {
     fn render(&self, _path: &Path, _mode: ViewMode, _raw_diff: Option<&str>) -> RenderResult {
         RenderResult {
+            embeds: Vec::new(),
             content: Text::raw("fake-rendered-content"),
             notices: Vec::new(),
             source: None,
@@ -656,6 +657,7 @@ impl ContentProvider for EchoDiffContent {
             None => Text::raw("NON-DIFF-CONTENT"),
         };
         RenderResult {
+            embeds: Vec::new(),
             content,
             notices: Vec::new(),
             source: None,

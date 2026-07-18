@@ -26,7 +26,7 @@ use crossterm::terminal::{
 };
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Text};
 use ratatui::widgets::Paragraph;
 use ratatui::{DefaultTerminal, Frame};
 use ratatui_image::picker::{Picker, ProtocolType};
@@ -295,15 +295,21 @@ fn event_loop(
         // and a no-op when the displayed media file hasn't changed. `None` when inline media is
         // disabled or the display isn't an image/video.
         let inline_media = controller.inline_media();
-        if let Some(mp) = media_pane.as_deref_mut()
-            && mp.sync(inline_media.as_ref())
-        {
-            dirty = true; // a newly-loaded image needs a paint even if nothing else changed
+        // The inline embeds of a rendered markdown note (empty for any other view, or while an
+        // overlay covers the pane — the controller gates both). Cloned so the draw closure can
+        // borrow the controller mutably without conflict.
+        let embeds = controller.markdown_embeds().to_vec();
+        if let Some(mp) = media_pane.as_deref_mut() {
+            // A newly-loaded standalone image OR embed needs a paint even if nothing else changed.
+            let a = mp.sync(inline_media.as_ref());
+            let b = mp.sync_embeds(&embeds);
+            dirty |= a || b;
         }
         // Suppress the image while a modal overlay (help `?`, finder, outline, …) covers the
         // content pane — the terminal graphic draws above text cells, so it would otherwise sit on
         // top of the modal. The decoded image stays cached (sync above ran with the real value), so
-        // closing the modal re-shows it without re-decoding / re-running ffmpeg.
+        // closing the modal re-shows it without re-decoding / re-running ffmpeg. (Embeds are already
+        // empty here when an overlay is open — the controller gates `markdown_embeds`.)
         let overlay_open = controller.content_overlay_open();
         if dirty {
             let media_pane = media_pane.as_deref_mut();
@@ -312,6 +318,7 @@ fn event_loop(
             } else {
                 inline_media.as_ref()
             };
+            let embeds = &embeds;
             terminal.draw(|frame| {
                 controller.set_width(frame.area().width);
                 let view: ViewState = controller.view_state();
@@ -323,19 +330,20 @@ fn event_loop(
                 let geom = presenter::geometry(frame.area(), &view);
                 let content_inner = geom.content_inner;
                 controller.set_pane_geometry(geom);
-                // Overlay the inline image below the metadata header, within the content pane's
-                // interior. The presenter has already drawn the metadata placeholder text; the
-                // image fills the rows beneath it.
-                if let (Some(mp), Some(im), Some(inner)) = (media_pane, inline_media, content_inner)
-                {
-                    let header = im.header_rows.min(inner.height);
-                    let img_area = Rect {
-                        x: inner.x,
-                        y: inner.y + header,
-                        width: inner.width,
-                        height: inner.height.saturating_sub(header),
-                    };
-                    mp.render(frame, img_area);
+                if let (Some(mp), Some(inner)) = (media_pane, content_inner) {
+                    // A standalone media file: the metadata header on top, the image below it.
+                    if let Some(im) = inline_media {
+                        let header = im.header_rows.min(inner.height);
+                        let img_area = Rect {
+                            x: inner.x,
+                            y: inner.y + header,
+                            width: inner.width,
+                            height: inner.height.saturating_sub(header),
+                        };
+                        mp.render(frame, img_area);
+                    }
+                    // A rendered markdown note: images over their reserved bands (scroll-aware).
+                    mp.render_embeds(frame, inner, view.content_scroll, embeds);
                 }
             })?;
             dirty = false;
@@ -552,34 +560,7 @@ struct LiveContent {
     show_properties: Arc<AtomicBool>,
 }
 
-/// Apply a text transform to a [`Prepared`]'s content, preserving the variant (a `Binary`
-/// placeholder and any truncation notice pass through unchanged). Used to rewrite markdown source
-/// before it is handed to glow.
-fn map_prepared_text(prepared: Prepared, f: impl Fn(&str) -> String) -> Prepared {
-    match prepared {
-        Prepared::Full { text } => Prepared::Full { text: f(&text) },
-        Prepared::Truncated { text, notice } => Prepared::Truncated {
-            text: f(&text),
-            notice,
-        },
-        Prepared::Binary => Prepared::Binary,
-    }
-}
-
 impl LiveContent {
-    /// The Obsidian markdown transforms applied to a note's source before glow renders it (the
-    /// rendered-markdown view only): prepend a frontmatter **Properties** table when the `p` panel
-    /// is shown (else hide the frontmatter), rewrite callouts (`> [!note]`) into titled
-    /// blockquotes, and task-list markers (`- [ ]` / `- [x]`) into `☐` / `☑` glyphs. Rendering only
-    /// — the read-only viewer never writes a toggled checkbox back to the file (constitution §1).
-    /// Pure over the prepared text; a binary/placeholder passes through.
-    fn transform_markdown(&self, prepared: Prepared) -> Prepared {
-        let show_properties = self.show_properties.load(Ordering::Relaxed);
-        map_prepared_text(prepared, move |t| {
-            crate::mdnote::preprocess(t, show_properties)
-        })
-    }
-
     /// Build the content-pane result for an image/video file: a plain-text placeholder naming the
     /// type, its dimensions (cheaply parsed for images), its size, and whether an inline preview is
     /// available. Read-only (a bounded header read for dimensions + a metadata size stat); never
@@ -605,8 +586,50 @@ impl LiveContent {
             content: render::to_text(&text),
             notices: Vec::new(),
             source: None,
+            embeds: Vec::new(),
         }
     }
+}
+
+/// A planned inline image embed: the sentinel id (its index among detected embeds), the resolved
+/// image file, and the band size in cells. Built pre-glow; `reserve_bands` finds the sentinel line
+/// post-glow and pairs it with this to produce a [`crate::media::MediaEmbed`].
+struct EmbedPlan {
+    id: usize,
+    path: PathBuf,
+    cols: u16,
+    rows: u16,
+}
+
+/// The tallest an inline embed band may be (rows), so one image can't dominate the note and every
+/// band fits within a normal content pane (the app shows the image only when its band is fully in
+/// view). A taller image is letterboxed into this height; select the file itself for a full view.
+const MAX_EMBED_ROWS: u16 = 24;
+/// Rough pixels-per-cell width, to translate an Obsidian `|width` (px) hint into terminal columns.
+const ASSUMED_CELL_PX_W: u32 = 8;
+
+/// The band size (cols × rows) to reserve for an image embed: width from the `|width` px hint (else
+/// the pane width), clamped to the pane; height from the image's aspect ratio assuming ~2:1 cell
+/// height:width, capped at [`MAX_EMBED_ROWS`]. Unknown dimensions get a modest default band.
+fn embed_band_size(
+    dims: Option<(u32, u32)>,
+    width_hint: Option<u32>,
+    pane_cols: u16,
+) -> (u16, u16) {
+    let pane_cols = pane_cols.max(1);
+    let cols = match width_hint {
+        Some(px) => ((px / ASSUMED_CELL_PX_W).max(1) as u16).min(pane_cols),
+        None => pane_cols,
+    };
+    let rows = match dims {
+        Some((w, h)) if w > 0 && h > 0 => {
+            // rows ≈ cols * (h/w) / cell_aspect, cell_aspect ≈ 2 (height:width).
+            let r = (cols as u32 * h) / (w * 2);
+            (r.max(1) as u16).min(MAX_EMBED_ROWS)
+        }
+        _ => MAX_EMBED_ROWS / 2,
+    };
+    (cols, rows)
 }
 
 impl ContentProvider for LiveContent {
@@ -654,11 +677,13 @@ impl ContentProvider for LiveContent {
         // Obsidian markdown transforms: rewrite the source before glow renders it, but ONLY for the
         // rendered-markdown view — the source view (`v` → SyntaxContent) shows the raw file
         // untouched, and diffs render from git text. `source` above is already `None` here, so the
-        // transform never disturbs the source map.
-        let prepared = if mode == ViewMode::RenderedMarkdown {
-            self.transform_markdown(prepared)
+        // transform never disturbs the source map. For rendered markdown this also plans inline
+        // image embeds and injects a sentinel for each resolved one (reserved into a blank band
+        // after glow renders, below).
+        let (prepared, embed_plan) = if mode == ViewMode::RenderedMarkdown {
+            self.transform_markdown_with_embeds(path, prepared, width)
         } else {
-            prepared
+            (prepared, Vec::new())
         };
         // For rendered markdown at a known pane width, point glow's `-w` at that width so it lays
         // out and wraps tables to fit the pane (columns sized, cells ellipsized, borders intact),
@@ -677,12 +702,109 @@ impl ContentProvider for LiveContent {
             }
             _ => render::render(&self.renderers, &prepared, mode, raw_diff, name, self.caps),
         };
+        // Turn each planned embed's sentinel line into a reserved blank band and collect the
+        // resulting `MediaEmbed`s (empty for every non-markdown / embed-free render).
+        let (content, embeds) = reserve_embeds(content, &embed_plan);
         RenderResult {
             content,
             notices: notice.into_iter().collect(),
             source,
+            embeds,
         }
     }
+}
+
+impl LiveContent {
+    /// Run the Obsidian markdown transforms, then detect + resolve inline image embeds and inject a
+    /// sentinel for each resolved one. Returns the sentinel-injected `Prepared` (glow renders it)
+    /// plus the per-embed plan `reserve_embeds` pairs with the post-glow sentinel lines. A binary /
+    /// embed-free note passes through with an empty plan.
+    fn transform_markdown_with_embeds(
+        &self,
+        note: &Path,
+        prepared: Prepared,
+        width: Option<u16>,
+    ) -> (Prepared, Vec<EmbedPlan>) {
+        let show_properties = self.show_properties.load(Ordering::Relaxed);
+        let text = match &prepared {
+            Prepared::Full { text } | Prepared::Truncated { text, .. } => text.clone(),
+            Prepared::Binary => return (prepared, Vec::new()),
+        };
+        let transformed = crate::mdnote::preprocess(&text, show_properties);
+        // Only rewrite embeds into blank bands when an image can actually paint (a graphics
+        // terminal); otherwise leave the markup so a non-graphics terminal shows it rather than an
+        // unexplained blank gap.
+        if !self.inline_media {
+            return (set_prepared_text(prepared, transformed), Vec::new());
+        }
+        let embeds = crate::mdembed::image_embeds(&transformed);
+        if embeds.is_empty() {
+            return (set_prepared_text(prepared, transformed), Vec::new());
+        }
+        // Resolve each embed to a file and plan its band; only resolved embeds get a sentinel.
+        let pane_cols = width.unwrap_or(80);
+        let mut replacements: Vec<(std::ops::Range<usize>, usize)> = Vec::new();
+        let mut plan: Vec<EmbedPlan> = Vec::new();
+        for (id, e) in embeds.iter().enumerate() {
+            let Some(abs) = crate::obsidian::find_attachment(note, &e.target, e.wiki, 20_000)
+            else {
+                continue;
+            };
+            let (cols, rows) =
+                embed_band_size(crate::media::image_dimensions(&abs), e.width, pane_cols);
+            replacements.push((e.span.clone(), id));
+            plan.push(EmbedPlan {
+                id,
+                path: abs,
+                cols,
+                rows,
+            });
+        }
+        if plan.is_empty() {
+            return (set_prepared_text(prepared, transformed), Vec::new());
+        }
+        let injected = crate::mdembed::inject(&transformed, &replacements);
+        (set_prepared_text(prepared, injected), plan)
+    }
+}
+
+/// Replace a [`Prepared`]'s text with `text`, preserving the variant (a `Binary` passes through
+/// unchanged, keeping any truncation notice on `Truncated`).
+fn set_prepared_text(prepared: Prepared, text: String) -> Prepared {
+    match prepared {
+        Prepared::Full { .. } => Prepared::Full { text },
+        Prepared::Truncated { notice, .. } => Prepared::Truncated { text, notice },
+        Prepared::Binary => Prepared::Binary,
+    }
+}
+
+/// Post-glow: turn each planned embed's sentinel line into a reserved blank band and pair it with
+/// the plan to produce the [`crate::media::MediaEmbed`] list. A no-op (returns the text unchanged +
+/// an empty list) when there is no plan.
+fn reserve_embeds(
+    content: Text<'static>,
+    plan: &[EmbedPlan],
+) -> (Text<'static>, Vec<crate::media::MediaEmbed>) {
+    if plan.is_empty() {
+        return (content, Vec::new());
+    }
+    let (text, bands) = crate::mdembed::reserve_bands(content, |id| {
+        plan.iter().find(|p| p.id == id).map(|p| p.rows)
+    });
+    let embeds = bands
+        .into_iter()
+        .filter_map(|(id, line)| {
+            plan.iter()
+                .find(|p| p.id == id)
+                .map(|p| crate::media::MediaEmbed {
+                    content_line: line,
+                    path: p.path.clone(),
+                    cols: p.cols,
+                    rows: p.rows,
+                })
+        })
+        .collect();
+    (text, embeds)
 }
 
 /// Resolve the editor command to use, given `$EDITOR`'s raw value (AC-8 part).
@@ -934,6 +1056,11 @@ struct MediaPane {
     /// The image currently loaded for display, keyed by its source path. Reloaded when the
     /// selection changes; evicted (with any poster temp removed) when it leaves display.
     current: Option<LoadedMedia>,
+    /// Decoded images for the rendered-markdown inline embeds, keyed by file path — loaded on
+    /// demand and retained across scroll so scrolling never re-decodes; entries not in the current
+    /// note's embed set are evicted on each sync. Distinct from `current` (the standalone preview);
+    /// only one of the two is ever in play at a time (media file vs. markdown note).
+    embed_cache: std::collections::HashMap<PathBuf, LoadOutcome>,
 }
 
 /// A loaded (or failed-to-load) inline image, keyed by the source media path.
@@ -986,6 +1113,7 @@ impl MediaPane {
             video_tool: cap.video_tool,
             poster_salt: 0,
             current: None,
+            embed_cache: std::collections::HashMap::new(),
         }
     }
 
@@ -1093,6 +1221,70 @@ impl MediaPane {
             && let Some(p) = c.cleanup
         {
             let _ = std::fs::remove_file(p);
+        }
+    }
+
+    /// Reconcile the markdown-embed image cache with the current note's embed set: evict images no
+    /// longer referenced (a different note) and decode any newly-referenced ones. Returns `true`
+    /// when something new was decoded (so the caller repaints). The (blocking) decode happens here,
+    /// between frames — never in the draw closure. A no-op when the set is unchanged.
+    fn sync_embeds(&mut self, embeds: &[crate::media::MediaEmbed]) -> bool {
+        let wanted: std::collections::HashSet<&Path> =
+            embeds.iter().map(|e| e.path.as_path()).collect();
+        self.embed_cache.retain(|k, _| wanted.contains(k.as_path()));
+        let mut loaded = false;
+        for e in embeds {
+            if self.embed_cache.contains_key(&e.path) {
+                continue;
+            }
+            let outcome = match decode_image(&e.path) {
+                Ok(img) => LoadOutcome::Ready(Box::new(self.picker.new_resize_protocol(img))),
+                Err(reason) => LoadOutcome::Failed(reason),
+            };
+            self.embed_cache.insert(e.path.clone(), outcome);
+            loaded = true;
+        }
+        loaded
+    }
+
+    /// Paint each inline embed image over its reserved band in the rendered markdown, scroll-aware:
+    /// the band at content line `content_line` sits at screen row `content_inner.y + content_line −
+    /// content_scroll`. An embed is drawn only when its whole band is within the content viewport
+    /// (the v1 rule — `ratatui-image` has no partial-clip), so it never spills over the border or a
+    /// modal; a partially-scrolled or oversized band shows its blank reserved space instead. A
+    /// failed decode is left blank (the surrounding note still reads).
+    fn render_embeds(
+        &mut self,
+        frame: &mut Frame,
+        content_inner: Rect,
+        content_scroll: u16,
+        embeds: &[crate::media::MediaEmbed],
+    ) {
+        let scroll = content_scroll as usize;
+        let view_h = content_inner.height as usize;
+        for e in embeds {
+            if e.content_line < scroll {
+                continue; // band top scrolled above the viewport
+            }
+            let rel = e.content_line - scroll;
+            let rows = e.rows as usize;
+            if rows == 0 || rel + rows > view_h {
+                continue; // band bottom past the viewport — show only when fully visible
+            }
+            let cols = e.cols.min(content_inner.width).max(1);
+            let area = Rect {
+                x: content_inner.x,
+                y: content_inner.y + rel as u16,
+                width: cols,
+                height: e.rows,
+            };
+            if let Some(LoadOutcome::Ready(proto)) = self.embed_cache.get_mut(&e.path) {
+                frame.render_stateful_widget(
+                    StatefulImage::default().resize(Resize::Fit(None)),
+                    area,
+                    proto.as_mut(),
+                );
+            }
         }
     }
 }
@@ -1319,6 +1511,7 @@ mod tests {
                 content: ratatui::text::Text::raw("body"),
                 notices: Vec::new(),
                 source: None,
+                embeds: Vec::new(),
             }
         }
     }
@@ -1785,6 +1978,103 @@ mod tests {
         assert!(
             text.contains("binary file"),
             "media_preview = false → the plain binary placeholder: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A minimal valid PNG header (signature + IHDR) so `image_dimensions` parses `w`×`h`.
+    fn png_header(w: u32, h: u32) -> Vec<u8> {
+        let mut b = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        b.extend_from_slice(&[0, 0, 0, 13]);
+        b.extend_from_slice(b"IHDR");
+        b.extend_from_slice(&w.to_be_bytes());
+        b.extend_from_slice(&h.to_be_bytes());
+        b
+    }
+
+    #[test]
+    fn markdown_render_reserves_a_band_for_a_resolved_image_embed() {
+        // A note that embeds a same-folder image renders with the embed markup replaced by a
+        // reserved blank band, and reports the resolved image + band in `RenderResult::embeds` (what
+        // the app paints over). Hermetic: no glow needed — the plain-text fallback still carries the
+        // injected sentinel, which `reserve_bands` turns into the band.
+        let root = tmp("md-embed");
+        std::fs::write(root.join("pic.png"), png_header(400, 200)).unwrap();
+        std::fs::write(
+            root.join("note.md"),
+            "# Title\n\n![[pic.png|481]]\n\nafter the image\n",
+        )
+        .unwrap();
+        let content = LiveContent {
+            root: root.clone(),
+            renderers: default_renderers(),
+            caps: Caps::default(),
+            media_preview: true,
+            inline_media: true, // a graphics terminal — embeds are reserved
+            video_poster: false,
+            show_properties: Arc::new(AtomicBool::new(true)),
+        };
+        let out = content.render_at_width(
+            &root.join("note.md"),
+            ViewMode::RenderedMarkdown,
+            None,
+            Some(60),
+        );
+
+        assert_eq!(out.embeds.len(), 1, "one resolved image embed");
+        assert_eq!(
+            out.embeds[0].path,
+            root.join("pic.png"),
+            "resolved same-folder"
+        );
+        assert!(out.embeds[0].rows >= 1 && out.embeds[0].rows <= MAX_EMBED_ROWS);
+        // The band top line index is within the rendered content.
+        assert!(out.embeds[0].content_line < out.content.lines.len());
+        // The sentinel is gone (replaced by the blank band).
+        let flat: String = out
+            .content
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !flat.contains("HFVxEMBED"),
+            "sentinel replaced by the band: {flat}"
+        );
+        assert!(
+            flat.contains("after the image"),
+            "surrounding note text kept"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn markdown_render_keeps_embed_markup_when_no_graphics_terminal() {
+        // With no graphics terminal (`inline_media = false`), embeds are NOT rewritten into blank
+        // bands — the markup is left for glow so the reader isn't shown an unexplained gap.
+        let root = tmp("md-embed-nogfx");
+        std::fs::write(root.join("pic.png"), png_header(400, 200)).unwrap();
+        std::fs::write(root.join("note.md"), "![[pic.png]]\n").unwrap();
+        let content = LiveContent {
+            root: root.clone(),
+            renderers: default_renderers(),
+            caps: Caps::default(),
+            media_preview: true,
+            inline_media: false,
+            video_poster: false,
+            show_properties: Arc::new(AtomicBool::new(true)),
+        };
+        let out = content.render_at_width(
+            &root.join("note.md"),
+            ViewMode::RenderedMarkdown,
+            None,
+            Some(60),
+        );
+        assert!(
+            out.embeds.is_empty(),
+            "no bands reserved without a graphics terminal"
         );
         let _ = std::fs::remove_dir_all(&root);
     }

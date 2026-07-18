@@ -139,6 +139,13 @@ not, by rewriting the note before it is rendered. These apply to any markdown no
   `☑` — so a to-do reads as a checklist. This is **display only**: the viewer is read-only
   (see the [constitution](../constitution.md)), so it never writes a toggled state back to the file —
   edit the note in your editor (`e`, or `n` for neovim) to change a checkbox.
+- **Inline image embeds.** An image embed — Obsidian's `![[image.png|width]]` (the file is resolved
+  same-folder first, then vault-wide) or a standard `![](path.png)` — renders the **image inline** at
+  the embed's location, scaling to fit (the `|width` hint is honored, capped to a preview height).
+  It scrolls with the note and appears once its whole band is on screen; for a full-size view, select
+  the image file itself in the tree (see [inline preview](renderers.md#inline-image--video-preview)).
+  Needs a graphics-capable terminal (and, inside herdr, `kitty_graphics = true`); without one the
+  note shows the embed markup instead. Non-image embeds (note transclusions, PDFs) are unchanged.
 
 ## Annotating files and ranges
 

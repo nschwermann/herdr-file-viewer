@@ -58,6 +58,7 @@ impl ContentProvider for MultiLine {
     fn render(&self, _path: &Path, _mode: ViewMode, _raw_diff: Option<&str>) -> RenderResult {
         let lines: Vec<String> = (0..20).map(|i| format!("line{i}")).collect();
         RenderResult {
+            embeds: Vec::new(),
             content: Text::raw(lines.join("\n")),
             notices: Vec::new(),
             source: None,
@@ -78,6 +79,7 @@ impl ContentProvider for WrapBody {
         let mut lines = vec!["a".repeat(170), "b".repeat(90)];
         lines.extend((2..10).map(|i| format!("line{i}")));
         RenderResult {
+            embeds: Vec::new(),
             content: Text::raw(lines.join("\n")),
             notices: Vec::new(),
             source: None,
@@ -169,6 +171,7 @@ struct EmptyContent;
 impl ContentProvider for EmptyContent {
     fn render(&self, _path: &Path, _mode: ViewMode, _raw_diff: Option<&str>) -> RenderResult {
         RenderResult {
+            embeds: Vec::new(),
             content: Text::default(),
             notices: Vec::new(),
             source: None,
@@ -185,6 +188,7 @@ struct ControlContent;
 impl ContentProvider for ControlContent {
     fn render(&self, _path: &Path, _mode: ViewMode, _raw_diff: Option<&str>) -> RenderResult {
         RenderResult {
+            embeds: Vec::new(),
             content: Text::raw("\tcode\x1bhere"),
             notices: Vec::new(),
             source: None,
@@ -203,6 +207,7 @@ impl ContentProvider for GutterContent {
     fn render(&self, _path: &Path, _mode: ViewMode, _raw_diff: Option<&str>) -> RenderResult {
         let lines = ["  1 fn main() {", "  2     let x = 5;", "  3 }"];
         RenderResult {
+            embeds: Vec::new(),
             content: Text::raw(lines.join("\n")),
             notices: Vec::new(),
             source: Some(vec![
@@ -224,6 +229,7 @@ impl ContentProvider for PlainNoSource {
     fn render(&self, _path: &Path, _mode: ViewMode, _raw_diff: Option<&str>) -> RenderResult {
         let lines = ["intro line", "2 spaces of intro", "tail line"];
         RenderResult {
+            embeds: Vec::new(),
             content: Text::raw(lines.join("\n")),
             notices: Vec::new(),
             source: None,
@@ -1635,6 +1641,7 @@ fn wrapped_word_break_maps_columns_to_the_right_word() {
     impl ContentProvider for WordWrapBody {
         fn render(&self, _path: &Path, _mode: ViewMode, _raw_diff: Option<&str>) -> RenderResult {
             RenderResult {
+                embeds: Vec::new(),
                 content: Text::raw(format!("{} {}", "a".repeat(50), "b".repeat(40))),
                 notices: Vec::new(),
                 source: None,
@@ -1747,6 +1754,7 @@ impl ContentProvider for GutterWithSource {
     fn render(&self, _path: &Path, _mode: ViewMode, _raw_diff: Option<&str>) -> RenderResult {
         let displayed = ["   1 fn main() {", "   2     let x = 5;", "   3 }"];
         RenderResult {
+            embeds: Vec::new(),
             content: Text::raw(displayed.join("\n")),
             notices: Vec::new(),
             source: Some(vec![
@@ -1766,6 +1774,7 @@ impl ContentProvider for PlainWithSource {
     fn render(&self, _path: &Path, _mode: ViewMode, _raw_diff: Option<&str>) -> RenderResult {
         let lines = ["fn main() {", "    let x = 5;", "3 loops below"];
         RenderResult {
+            embeds: Vec::new(),
             content: Text::raw(lines.join("\n")),
             notices: Vec::new(),
             source: Some(vec![
@@ -1936,6 +1945,7 @@ fn source_control_bytes_are_still_scrubbed() {
     impl ContentProvider for HostileSource {
         fn render(&self, _path: &Path, _mode: ViewMode, _raw_diff: Option<&str>) -> RenderResult {
             RenderResult {
+                embeds: Vec::new(),
                 content: Text::raw("clean view"),
                 notices: Vec::new(),
                 source: Some(vec!["\tcode\x1b[2Jhere".to_string()]),
@@ -1975,6 +1985,7 @@ fn wrapped_break_dropped_space_does_not_shift_selection_to_the_line_above() {
         fn render(&self, _path: &Path, _mode: ViewMode, _raw_diff: Option<&str>) -> RenderResult {
             let line1 = format!("{} {}", "x".repeat(40), "y".repeat(40));
             RenderResult {
+                embeds: Vec::new(),
                 content: Text::raw(format!("{line1}\nsecond\nthird")),
                 notices: Vec::new(),
                 source: None,

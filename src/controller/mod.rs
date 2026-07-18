@@ -123,6 +123,10 @@ pub struct RenderResult {
     /// where no per-display-line source exists) and for providers that don't supply it; the
     /// copy paths then fall back to display-text extraction.
     pub source: Option<Vec<String>>,
+    /// Inline image embeds resolved in a rendered markdown note (`![[img]]` / `![](path)`): each
+    /// names a reserved blank band in `content` the app paints an image over. Empty for every other
+    /// view and provider. See [`crate::media::MediaEmbed`].
+    pub embeds: Vec<crate::media::MediaEmbed>,
 }
 
 /// Produce the content-pane text for `(file, mode)`. `Send` so a later task can run it on a
@@ -566,6 +570,11 @@ pub struct Controller {
     /// cleared in lockstep with `content` (`poll` / `clear_content`), so the copy paths can trust
     /// that when it is `Some`, index `n-1` IS displayed line `n`'s source.
     content_source: Option<Vec<String>>,
+    /// Inline image embeds in the displayed rendered-markdown note (`![[img]]` / `![](path)`), each
+    /// naming a reserved blank band in `content` for the app to paint an image over. Applied and
+    /// cleared in lockstep with `content`; empty for every other view. See
+    /// [`markdown_embeds`](Self::markdown_embeds).
+    content_embeds: Vec<crate::media::MediaEmbed>,
     /// The path of the file whose content is currently displayed in the pane — the title's
     /// source of truth, so the border label switches in lockstep with the body. `None`
     /// while no file's content has landed yet (launch, a re-root, or a directory/empty tree
@@ -815,6 +824,7 @@ impl Controller {
             content: Text::raw(""),
             content_notices: Vec::new(),
             content_source: None,
+            content_embeds: Vec::new(),
             content_path: None,
             content_rendering: false,
             action_notice: None,
@@ -911,6 +921,7 @@ impl Controller {
                     content: Text::raw("[content unavailable: renderer error]"),
                     notices: vec!["the renderer failed unexpectedly; showing a placeholder".into()],
                     source: None,
+                    embeds: Vec::new(),
                 });
                 if result_tx.send((job.seq, result)).is_err() {
                     break; // controller gone
@@ -1267,6 +1278,17 @@ impl Controller {
             // the rows below it. `content` is that placeholder whenever `content_path` is media.
             header_rows: self.content.lines.len() as u16,
         })
+    }
+
+    /// The inline image embeds to paint over the displayed rendered-markdown note, in content-line
+    /// order — or empty when inline media is disabled or a modal overlay covers the content pane
+    /// (the same suppression as the standalone image). The app pairs each band with the content
+    /// scroll + pane geometry to place the image; the decoded images are cached in `MediaPane`.
+    pub fn markdown_embeds(&self) -> &[crate::media::MediaEmbed] {
+        if !self.inline_media_enabled || self.content_overlay_open() {
+            return &[];
+        }
+        &self.content_embeds
     }
 
     /// Inject the shared frontmatter-Properties-panel flag (the `p` toggle). Shared with the live
@@ -2804,6 +2826,7 @@ impl Controller {
             self.content = Text::raw("Rendering\u{2026}");
             self.content_notices.clear();
             self.content_source = None; // the placeholder has no source; the landing render brings its own
+            self.content_embeds = Vec::new(); // stale embed bands must not paint over the placeholder
             self.content_rendering = true;
         }
     }
@@ -2816,6 +2839,7 @@ impl Controller {
         self.content = Text::raw(reason.label());
         self.content_notices.clear();
         self.content_source = None; // guidance text has no source behind it
+        self.content_embeds = Vec::new(); // no embeds behind empty-state guidance
         // No file content is displayed for a directory/empty tree, and no render is in flight
         // (this path sends no `RenderJob`), so the title falls back to the selected node's name
         //.
@@ -2844,6 +2868,7 @@ impl Controller {
                 self.content_selection = None;
                 self.content_notices = result.notices;
                 self.content_source = result.source; // in lockstep with `content` (copy fidelity)
+                self.content_embeds = result.embeds; // in lockstep with `content` (embed bands)
                 self.applied_seq = seq; // the displayed content is now this render (go-to-line guard)
                 // A reflow keeps the user's scroll position, but the reflowed body may have a
                 // different rendered-row count (a table re-lays-out at the new width), so re-clamp
@@ -3086,6 +3111,7 @@ mod tests {
                 content: Text::raw(""),
                 notices: Vec::new(),
                 source: None,
+                embeds: Vec::new(),
             }
         }
     }
