@@ -174,6 +174,51 @@ impl Controller {
         Effects::redraw()
     }
 
+    /// Follow a link parsed from a **mouse click** on the displayed content (FIX 3): resolve its
+    /// target vault-wide (the same shortest-unique-path resolution the `g` navigator uses) and
+    /// navigate to that note in-viewer, keeping the back/forward history. An unresolved target shows
+    /// a notice. Shared by the content-click hit-test (`content_target_at`).
+    pub(super) fn follow_content_link(&mut self, link: &crate::wikilink::Link) -> Effects {
+        let current = self.content_path.clone().or_else(|| {
+            self.tree
+                .selected()
+                .filter(|n| n.kind == NodeKind::File)
+                .map(|n| n.path)
+        });
+        let Some(current) = current else {
+            return Effects::noop();
+        };
+        let Some(abs) = self.resolve_note_target(&current, &link.target) else {
+            self.action_notice = Some(format!("Unresolved link: {}", link.display()));
+            return Effects::redraw();
+        };
+        if !self.tree.reveal(&abs) {
+            self.action_notice = Some(format!("Could not open {}", self.nav_display_path(&abs)));
+            return Effects::redraw();
+        }
+        // Mirror `follow_link`: push the note we're leaving, start a fresh forward history, navigate.
+        if let Some(cur) = self.content_path.clone() {
+            self.nav_back.push(cur);
+        }
+        self.nav_forward.clear();
+        self.after_nav_reveal(&abs, link.anchor.as_ref());
+        Effects::redraw()
+    }
+
+    /// Resolve a wikilink/markdown-link `target` to an absolute **note** path within `current`'s
+    /// vault, the Obsidian way (shortest-unique-path). `None` when `current` is not a markdown note
+    /// in a vault, or the target does not resolve. Read-only (a bounded vault walk).
+    fn resolve_note_target(&self, current: &Path, target: &str) -> Option<PathBuf> {
+        if !crate::obsidian::is_markdown(current) {
+            return None;
+        }
+        let vault = crate::obsidian::find_vault(current)?;
+        let source_rel = vault.relative(current)?;
+        let index = crate::obsidian::markdown_index(&vault.root, 20_000);
+        let rel = crate::obsidian::resolve_target(target, source_rel, &index)?;
+        Some(vault.root.join(rel))
+    }
+
     /// Go back to the previously-viewed note (`[`). Peeks the back-stack, re-reveals that note, and
     /// on success pops it and pushes the note being left onto the forward-stack. An empty stack
     /// shows a notice and does nothing but redraw.

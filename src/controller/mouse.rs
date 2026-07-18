@@ -214,7 +214,13 @@ impl Controller {
                         .unwrap_or(true);
                     self.last_click = None;
                     if collapsed {
+                        // A plain click (no drag): if it landed on a followable link in a markdown
+                        // note, follow it (FIX 3); otherwise it's a bare click — drop the collapsed
+                        // selection and just focus the pane, as before.
                         self.content_selection = None;
+                        if let Some(target) = self.content_target_at(col, row) {
+                            return self.follow_content_target(target);
+                        }
                         self.focus = Focus::Content;
                         Effects::redraw()
                     } else {
@@ -278,6 +284,35 @@ impl Controller {
                 self.last_click = None;
                 Effects::noop()
             }
+        }
+    }
+
+    /// What followable markup, if any, sits under a content-pane click at screen `(col, row)`. The
+    /// reusable content hit-test behind FIX 3 (and, later, tag-filtering): map the click to a
+    /// content line + character caret (`char_at_content_col`, wrap/scroll-aware), read that display
+    /// line's text, and scan it for markup covering the caret. Gated to a markdown note in a vault,
+    /// so a bracket pair in code (or a non-note file) is never treated as a link. Read-only.
+    pub(super) fn content_target_at(&self, col: u16, row: u16) -> Option<ContentTarget> {
+        let current = self.content_path.as_ref()?;
+        if !crate::obsidian::is_markdown(current) {
+            return None;
+        }
+        let (line, caret) = self.char_at_content_col(col, row);
+        let text: String = self
+            .content
+            .lines
+            .get(line)?
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        link_at_char(&text, caret).map(ContentTarget::Link)
+    }
+
+    /// Act on a content-click [`ContentTarget`]: follow the link it named.
+    pub(super) fn follow_content_target(&mut self, target: ContentTarget) -> Effects {
+        match target {
+            ContentTarget::Link(link) => self.follow_content_link(&link),
         }
     }
 
@@ -496,6 +531,28 @@ impl Controller {
     }
 }
 
+/// A followable target discovered under a content-pane click — the reusable content hit-test
+/// result behind FIX 3. A closed set so a later clickable-markup kind (e.g. a tag → filter) forces
+/// a routing decision in [`Controller::follow_content_target`].
+pub(super) enum ContentTarget {
+    /// A wikilink / markdown link / note embed to follow to another note.
+    Link(crate::wikilink::Link),
+}
+
+/// The followable link whose span covers character index `caret` in one displayed line `text`, if
+/// any. Parses the line as markdown so `[[wikilinks]]`, `![[embeds]]`, and `[text](target)` are all
+/// recognized; returns the first whose byte span contains the caret's byte offset. Pure.
+fn link_at_char(text: &str, caret: usize) -> Option<crate::wikilink::Link> {
+    let byte = text
+        .char_indices()
+        .nth(caret)
+        .map(|(b, _)| b)
+        .unwrap_or(text.len());
+    crate::wikilink::parse_links(text)
+        .into_iter()
+        .find(|l| l.span.contains(&byte))
+}
+
 /// Two left-clicks at the same cell within this window are a double-click (a folder toggles
 /// expand/collapse; a file opens in zoom mode — the editor hand-off is the `e` key).
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
@@ -516,8 +573,39 @@ pub(super) fn is_double_click(
 
 #[cfg(test)]
 mod tests {
-    use super::{DOUBLE_CLICK, is_double_click};
+    use super::{DOUBLE_CLICK, is_double_click, link_at_char};
     use std::time::Instant;
+
+    #[test]
+    fn link_at_char_finds_the_link_under_the_caret() {
+        let text = "see [[Some Note]] and [x](other.md) here";
+        // Caret inside `[[Some Note]]`.
+        assert_eq!(
+            link_at_char(text, 6).map(|l| l.target),
+            Some("Some Note".to_string())
+        );
+        // Caret inside the markdown link `[x](other.md)`.
+        assert_eq!(
+            link_at_char(text, 23).map(|l| l.target),
+            Some("other.md".to_string())
+        );
+        // Caret in plain prose → nothing to follow.
+        assert!(link_at_char(text, 1).is_none());
+        assert!(link_at_char(text, 39).is_none());
+    }
+
+    #[test]
+    fn link_at_char_handles_wiki_embed_and_alias() {
+        // A note embed `![[Note]]` is followable; an alias link resolves to its target.
+        assert_eq!(
+            link_at_char("![[Diagram]]", 5).map(|l| l.target),
+            Some("Diagram".to_string())
+        );
+        assert_eq!(
+            link_at_char("[[Target|shown]]", 3).map(|l| l.target),
+            Some("Target".to_string())
+        );
+    }
 
     #[test]
     fn is_double_click_requires_the_same_row_within_the_window() {

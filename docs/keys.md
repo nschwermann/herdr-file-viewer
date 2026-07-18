@@ -118,6 +118,7 @@ The viewer is keyboard-first; the mouse is additive and on by default:
 | Gesture | Action |
 | --- | --- |
 | **Click** a tree row | Select it (focus the tree) |
+| **Click** a link in a note | **Follow it**: clicking a `[[wikilink]]`, `![[embed]]`, or `[text](note)` in a rendered/source markdown-in-vault view opens that note in-viewer (same as `g` → select), keeping the `[` / `]` back/forward history. A click on plain text just focuses the pane |
 | **Double-click** a folder | Expand / collapse it (same as `Enter`) |
 | **Double-click** a file | Open it in **zoom mode**: content full-screen (same as `Enter`); the editor is the `e` key |
 | **Wheel** over the content pane | Scroll it vertically; over the tree, move the selection |
