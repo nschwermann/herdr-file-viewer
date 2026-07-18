@@ -366,3 +366,55 @@ the links **out** of the note you're reading, `G` lists the notes that link **in
   self-link/non-linker exclusion, follow-and-`[`-back, the no-backlinks notice, and `Esc` closes) in
   `tests/controller.rs`. Full suite green except the one known-flaky e2e search test (fails on the
   base commit too).
+
+---
+
+## SUMMARY — end of overnight run
+
+**Branch:** `feat/obsidian-media-suite` (fork `nschwermann/herdr-file-viewer`). **Tip:** `c5d00b5`.
+All work pushed; crate version `2.0.0` (fork-distinct → `herdr plugin install` builds from source).
+Every step: `cargo build` + `clippy -D warnings` + `fmt` + `cargo test` green, save the one
+pre-existing flaky e2e test `search_routes_keys_to_query_and_n_cycles_and_esc_restores` (it fails on
+the clean base commit too — confirmed by stashing/re-running — so it's environmental, not ours).
+
+### Shipped (each its own commit, newest first)
+| Commit | Feature | Test in… |
+| --- | --- | --- |
+| `c5d00b5` | **Backlinks panel** (`G`) — what-links-here for the current note | §Backlinks panel (G) |
+| `be42da8` | **Global content search** (`S`) — ripgrep the vault (pure fallback) | §Global content search (S) |
+| `3539a05` | **Quick-switcher** (`F`) — fuzzy-open any note by name/alias | §Quick-switcher (F) |
+| `d4d744b` | **Vault index** — cached notes/aliases/links snapshot (foundation) | (internal; backs F + G) |
+| `afb0647` | **Unified interactive status bar** — view-type + links chips, clickable | §C |
+| `d7ae228` | **Clickable tags → filter explorer** (click a `#tag`, `Esc` clears) | §B |
+| `5934611` | **Rendering glowup** — callout boxes + highlighted links | §A |
+| `e730249` | **Click a link to follow it** (mouse) | §FIX 3 |
+| `fc5d60f` | **Inline image embeds in rendered markdown** | (verified by you earlier) |
+| `741d197` | docs: herdr `kitty_graphics` requirement | — |
+| `0d48a55` | fix: suppress inline image under a modal overlay | (verified by you: `?` menu) |
+| `f3dacac` | chore: fork version `2.0.0` (installs build from source) | — |
+| `91270aa` | **Inline image/video preview** (ratatui-image, kitty) | (verified by you earlier) |
+
+FIX 1 (inline media), FIX 2 (inline embeds), FIX 4 (version) you already confirmed live. FIX 3 and
+A–G are the ones that still want your eyes — steps in each section above.
+
+### Notable decisions (defaults I picked so as not to block)
+- **Overnight, I did not stop for visual verification** — every feature is green on automated checks
+  and documented here for you to eyeball. If anything looks off, it's a fork branch; easy to adjust.
+- TIER-2's vault index / quick-switcher / global search were **cherry-picked** from the local
+  `feat/vault-navigation` branch (where I'd built them earlier), not rebuilt — same tested code, now
+  on this branch. Additive merge conflicts (Modal enum, module lists, adjacent test blocks) resolved
+  by keeping both sides.
+- Backlinks key = `G` (mirror of `g`). Tag-filter clear = `Esc`. Neither collided with an existing key.
+- The **matrix Ghostty shader stays commented out** (per your instruction). Re-enable: uncomment
+  line 77 of `~/.config/ghostty/config` + `kill -USR2 $(pgrep -f Ghostty.app/Contents/MacOS/ghostty)`.
+
+### Skipped (with reasons)
+- **Task D (drag-to-resize inline images)** — you explicitly dropped it ("we have a better solution").
+- Nothing else was blocked or skipped; the full A–G + TIER-2 queue is done.
+
+### To pick up everything at once
+The plugin is `herdr plugin link`ed to this repo, and I left a fresh `cargo build --release` in
+place — just close the viewer pane (`q`) and reopen (`Ctrl+Space f`). New keys to try: `F`
+quick-switch, `S` vault search, `G` backlinks, click a `#tag` to filter, click a link/tag/view-type/
+links-counter. Inline images still need herdr's `kitty_graphics = true` (already on) + a client
+re-attach if you restart herdr.
