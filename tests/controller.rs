@@ -10774,3 +10774,93 @@ fn jumping_to_a_heading_closes_the_outline_and_queues_the_scroll() {
         "the selected heading queues a jump to its source line (7)"
     );
 }
+
+/// A Content Renderer that renders every note as a single clickable `#ryoshi-games` tag line, so a
+/// content click at that spot exercises the clickable-tag hit-test without a real markdown renderer.
+struct TagLineContent;
+impl ContentProvider for TagLineContent {
+    fn render(&self, _path: &Path, _mode: ViewMode, _raw_diff: Option<&str>) -> RenderResult {
+        RenderResult {
+            embeds: Vec::new(),
+            content: Text::raw("#ryoshi-games"),
+            notices: Vec::new(),
+            source: None,
+        }
+    }
+}
+
+#[test]
+fn clicking_a_tag_filters_the_tree_and_esc_clears_it() {
+    // End-to-end: a rendered note shows a `#ryoshi-games` tag; a content click on it filters the
+    // tree to every vault note carrying that tag (Home.md + Other.md, not Untagged.md), and Esc
+    // restores the full tree. Also guards the content hit-test's 1-based→0-based line indexing:
+    // the click must read the FIRST content line (the tag), not the second.
+    let dir = TempDir::new();
+    std::fs::create_dir(dir.path().join(".obsidian")).unwrap();
+    std::fs::write(dir.path().join("Home.md"), "#ryoshi-games in the body\n").unwrap();
+    std::fs::write(dir.path().join("Other.md"), "also #ryoshi-games here\n").unwrap();
+    std::fs::write(dir.path().join("Untagged.md"), "no tags here\n").unwrap();
+
+    // Build a controller whose renderer emits the clickable tag line.
+    let git: Arc<dyn GitService> = Arc::new(StubGit::default());
+    let components = Components {
+        providers: Box::new(move |_r| RootProviders {
+            git: Arc::clone(&git),
+            content: Box::new(TagLineContent),
+        }),
+        editor: Box::new(StubEditor::default()),
+        clipboard: Box::new(common::RecordingClipboard::default()),
+        renderers: None,
+    };
+    let mut ctrl = Controller::new(
+        common::resolved(dir.path().to_path_buf(), false),
+        Baseline::Head,
+        components,
+    );
+    // Set the content width first (so no reflow re-render is pending at click time), then feed the
+    // wide-layout geometry so the click maps into the content pane.
+    ctrl.set_content_viewport(58, 20);
+    ctrl.set_pane_geometry(wide_geometry());
+
+    // Settle the selection on Home.md so `content_path` is a markdown-in-vault note.
+    let home = dir.path().join("Home.md");
+    select_and_settle(&mut ctrl, &home, "Home.md");
+
+    let names = |c: &Controller| -> Vec<String> {
+        c.tree()
+            .visible_nodes()
+            .iter()
+            .map(|n| n.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    };
+
+    // Press + release on the tag at the first content row (content_inner starts at x=41, y=1).
+    ctrl.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 41, 1));
+    ctrl.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 41, 1));
+
+    assert_eq!(
+        ctrl.active_tag(),
+        Some("ryoshi-games"),
+        "the content click applied the tag filter"
+    );
+    let filtered = names(&ctrl);
+    assert!(filtered.contains(&"Home.md".to_string()));
+    assert!(filtered.contains(&"Other.md".to_string()));
+    assert!(
+        !filtered.contains(&"Untagged.md".to_string()),
+        "an untagged note is filtered out of the tree"
+    );
+    assert_eq!(
+        ctrl.view_state().tag_filter.as_deref(),
+        Some("ryoshi-games"),
+        "the tree title reflects the active filter"
+    );
+
+    // Esc clears the filter and restores the full tree.
+    ctrl.handle(Intent::Close);
+    assert_eq!(ctrl.active_tag(), None, "Esc cleared the tag filter");
+    assert!(
+        names(&ctrl).contains(&"Untagged.md".to_string()),
+        "the full tree is restored after clearing"
+    );
+}

@@ -288,31 +288,42 @@ impl Controller {
     }
 
     /// What followable markup, if any, sits under a content-pane click at screen `(col, row)`. The
-    /// reusable content hit-test behind FIX 3 (and, later, tag-filtering): map the click to a
-    /// content line + character caret (`char_at_content_col`, wrap/scroll-aware), read that display
-    /// line's text, and scan it for markup covering the caret. Gated to a markdown note in a vault,
-    /// so a bracket pair in code (or a non-note file) is never treated as a link. Read-only.
+    /// reusable content hit-test behind FIX 3 (link-following) and the clickable-tag filter: map the
+    /// click to a content line + character caret (`char_at_content_col`, wrap/scroll-aware), read
+    /// that display line's text, and scan it for markup covering the caret — a link first, then a
+    /// `#tag` token. Gated to a markdown note, so a bracket pair or a `#` in code (or a non-note
+    /// file) is never treated as a link/tag. Read-only.
     pub(super) fn content_target_at(&self, col: u16, row: u16) -> Option<ContentTarget> {
         let current = self.content_path.as_ref()?;
         if !crate::obsidian::is_markdown(current) {
             return None;
         }
+        // `char_at_content_col` returns a 1-based display line (its line-select contract); index the
+        // 0-based `content.lines` with `line - 1` so the scanned text is the line actually under the
+        // cursor. (`line` is clamped to `[1, last]`, so `checked_sub` only guards the empty pane.)
         let (line, caret) = self.char_at_content_col(col, row);
         let text: String = self
             .content
             .lines
-            .get(line)?
+            .get(line.checked_sub(1)?)?
             .spans
             .iter()
             .map(|s| s.content.as_ref())
             .collect();
-        link_at_char(&text, caret).map(ContentTarget::Link)
+        // A link wins over a tag when both could match (a link's anchor `[[Note#heading]]` embeds a
+        // `#`); the caret is inside the link span, so the link check claims it first.
+        if let Some(link) = link_at_char(&text, caret) {
+            return Some(ContentTarget::Link(link));
+        }
+        tag_at_char(&text, caret).map(ContentTarget::Tag)
     }
 
-    /// Act on a content-click [`ContentTarget`]: follow the link it named.
+    /// Act on a content-click [`ContentTarget`]: follow a link to its note, or apply a tag filter
+    /// to the tree.
     pub(super) fn follow_content_target(&mut self, target: ContentTarget) -> Effects {
         match target {
             ContentTarget::Link(link) => self.follow_content_link(&link),
+            ContentTarget::Tag(tag) => self.apply_tag_filter(&tag),
         }
     }
 
@@ -532,11 +543,54 @@ impl Controller {
 }
 
 /// A followable target discovered under a content-pane click — the reusable content hit-test
-/// result behind FIX 3. A closed set so a later clickable-markup kind (e.g. a tag → filter) forces
-/// a routing decision in [`Controller::follow_content_target`].
+/// result behind FIX 3. A closed set so each clickable-markup kind forces a routing decision in
+/// [`Controller::follow_content_target`].
 pub(super) enum ContentTarget {
     /// A wikilink / markdown link / note embed to follow to another note.
     Link(crate::wikilink::Link),
+    /// An Obsidian `#tag` (a Properties-panel chip or an inline body hashtag), without its leading
+    /// `#` — clicking it filters the tree to every vault note carrying that tag.
+    Tag(String),
+}
+
+/// The `#tag` token covering character index `caret` in one displayed line `text`, if any —
+/// returned **without** its leading `#` (e.g. `project/ryoshi`). A token is a `#` at a word
+/// boundary (not preceded by a tag char or another `#`) followed by tag characters
+/// (`[A-Za-z0-9_/-]`), rejecting a purely numeric run (Obsidian's inline-tag rule). The caret must
+/// fall on the `#` or any of the tag characters. This scans the *displayed* line text, so it finds
+/// a `#tag` chip in the rendered Properties panel (glow renders it as inline code, so its plain
+/// text is `#tag`) and an inline body hashtag alike. Pure — the same rules as
+/// [`crate::tagindex`]'s inline scanner, applied to a single caret.
+fn tag_at_char(text: &str, caret: usize) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    let is_tag_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '/');
+    let mut i = 0;
+    while i < n {
+        if chars[i] == '#' {
+            let boundary_ok = i == 0 || !(is_tag_char(chars[i - 1]) || chars[i - 1] == '#');
+            let mut j = i + 1;
+            while j < n && is_tag_char(chars[j]) {
+                j += 1;
+            }
+            // A real tag (at least one char after `#`) at a boundary, with the caret on `#..end`.
+            if boundary_ok && j > i + 1 && caret >= i && caret < j {
+                let raw: String = chars[i + 1..j].iter().collect();
+                // Reject a purely numeric run (`#123`) — not a tag, matching the index's rule.
+                if !raw.chars().all(|c| c.is_ascii_digit() || c == '/')
+                    && !raw.starts_with('/')
+                    && !raw.ends_with('/')
+                    && !raw.contains("//")
+                {
+                    return Some(raw);
+                }
+            }
+            i = j.max(i + 1);
+        } else {
+            i += 1;
+        }
+    }
+    None
 }
 
 /// The followable link whose span covers character index `caret` in one displayed line `text`, if
@@ -573,8 +627,39 @@ pub(super) fn is_double_click(
 
 #[cfg(test)]
 mod tests {
-    use super::{DOUBLE_CLICK, is_double_click, link_at_char};
+    use super::{DOUBLE_CLICK, is_double_click, link_at_char, tag_at_char};
     use std::time::Instant;
+
+    #[test]
+    fn tag_at_char_finds_the_tag_under_the_caret() {
+        // A rendered Properties chip line (glow strips the backticks → plain `#tag` text).
+        let text = "tags   #ryoshi-games   #project/ryoshi";
+        // Caret inside `#ryoshi-games` (on the `r`).
+        assert_eq!(
+            tag_at_char(text, 8),
+            Some("ryoshi-games".to_string()),
+            "caret inside the first chip"
+        );
+        // Caret on the leading `#` of the first chip.
+        assert_eq!(tag_at_char(text, 7), Some("ryoshi-games".to_string()));
+        // Caret inside the nested `#project/ryoshi`.
+        assert_eq!(tag_at_char(text, 25), Some("project/ryoshi".to_string()));
+        // Caret in plain prose (the `tags` label) → nothing.
+        assert!(tag_at_char(text, 1).is_none());
+    }
+
+    #[test]
+    fn tag_at_char_rejects_headings_numbers_and_midword_hashes() {
+        // A markdown heading (`# ` with a space) is not a tag — the space ends the token.
+        assert!(tag_at_char("# Heading", 0).is_none());
+        assert!(tag_at_char("# Heading", 2).is_none());
+        // A purely numeric hashtag is a number, not a tag.
+        assert!(tag_at_char("see #123 here", 5).is_none());
+        // A `#` glued to a preceding word char is not a tag boundary.
+        assert!(tag_at_char("email a#b c", 7).is_none());
+        // But a boundary `#tag` (after a space) IS a tag.
+        assert_eq!(tag_at_char("do #wip now", 4), Some("wip".to_string()));
+    }
 
     #[test]
     fn link_at_char_finds_the_link_under_the_caret() {

@@ -6,7 +6,7 @@ mod common;
 use common::TempDir;
 use herdr_file_viewer::git::Status;
 use herdr_file_viewer::tree::TreeModel;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -202,6 +202,69 @@ fn cursor_moves_and_stays_in_bounds_when_filters_shrink_the_list() {
         "cursor clamped after filtering"
     );
     assert!(model.selected().is_some());
+}
+
+#[test]
+fn tag_filter_restricts_to_matching_notes_then_restores() {
+    // The clickable-tag filter: restrict the tree to a set of matching notes (plus their ancestor
+    // dirs, auto-revealed), then lift it to restore the full tree. Modelled on changed-only.
+    let dir = TempDir::new();
+    fs::create_dir_all(dir.path().join("notes")).unwrap();
+    fs::write(dir.path().join("README.md"), "r").unwrap();
+    fs::write(dir.path().join("notes/tagged.md"), "t").unwrap();
+    fs::write(dir.path().join("notes/other.md"), "o").unwrap();
+
+    let mut matches = BTreeSet::new();
+    matches.insert(PathBuf::from("notes/tagged.md"));
+
+    let mut model = TreeModel::new(dir.path());
+    model.set_tag_filter(true, &matches);
+    assert!(model.tag_only());
+    let n = names(&model);
+    assert!(
+        n.contains(&"notes".to_string()),
+        "ancestor dir of a match is shown + auto-expanded"
+    );
+    assert!(n.contains(&"tagged.md".to_string()), "matching note shown");
+    assert!(
+        !n.contains(&"other.md".to_string()),
+        "non-matching sibling hidden"
+    );
+    assert!(
+        !n.contains(&"README.md".to_string()),
+        "non-matching top-level file hidden"
+    );
+
+    model.set_tag_filter(false, &BTreeSet::new());
+    assert!(!model.tag_only());
+    let restored = names(&model);
+    assert!(restored.contains(&"README.md".to_string()));
+    assert!(restored.contains(&"notes".to_string()));
+}
+
+#[test]
+fn reveal_relaxes_the_tag_filter_when_it_would_hide_the_target() {
+    // Revealing a note the tag did NOT match (e.g. a finder jump / link follow) must lift the tag
+    // filter so the target is reachable — mirroring the changed-only relax.
+    let dir = TempDir::new();
+    fs::write(dir.path().join("tagged.md"), "t").unwrap();
+    fs::write(dir.path().join("elsewhere.md"), "e").unwrap();
+
+    let mut matches = BTreeSet::new();
+    matches.insert(PathBuf::from("tagged.md"));
+
+    let mut model = TreeModel::new(dir.path());
+    model.set_tag_filter(true, &matches);
+    assert!(model.tag_only());
+
+    // Reveal a note outside the filter set.
+    let revealed = model.reveal(&dir.path().join("elsewhere.md"));
+    assert!(revealed, "reveal succeeds by relaxing the filter");
+    assert!(
+        !model.tag_only(),
+        "the tag filter is lifted so the off-filter target is visible"
+    );
+    assert!(names(&model).contains(&"elsewhere.md".to_string()));
 }
 
 #[test]

@@ -48,7 +48,7 @@ is additive and on by default.
 | `W` (Shift+`w`) | **Switch worktree**: open a picker of the repo's git worktrees and re-root the viewer to the one you pick (read-only; no branch checkout). Marks the current worktree and pre-selects the one with an active herdr agent; `↑`/`↓` move, `←`/`→` scroll long paths, `Enter` switches, `Esc` cancels. A switch clears annotations (their targets belong to the old root), so with any held it confirms first (`y` copies them and switches, `Enter` switches and discards, `Esc` cancels) |
 | `?` (Shift+`/`) | Open the **help overlay**: What's New (latest changelog, rendered markdown) + About (version, repo, license, update status); `Esc` / `q` closes it |
 | `u` | Dismiss the "update available" banner for this session |
-| `q` / `Esc` | Back out of zoom if zoomed; otherwise close the viewer and return to the prior pane. With annotations held, a confirm appears first (`y` copies them and quits, `q` quits and discards, `Esc` returns to the viewer): they are session-only, so quitting destroys them. Skip it with `confirm_discard = false` |
+| `q` / `Esc` | Layered back-out: clear a committed in-file search, then an active clicked-`#tag` [tree filter](#clearing-a-tag-filter), then un-zoom if zoomed; otherwise close the viewer and return to the prior pane. With annotations held, a confirm appears first (`y` copies them and quits, `q` quits and discards, `Esc` returns to the viewer): they are session-only, so quitting destroys them. Skip it with `confirm_discard = false` |
 
 These are the **default global** keys. Remap them with a `[keys]` table in the
 [config file](configuration.md#keybindings). Keys handled inside line-select mode, the annotation
@@ -119,6 +119,7 @@ The viewer is keyboard-first; the mouse is additive and on by default:
 | --- | --- |
 | **Click** a tree row | Select it (focus the tree) |
 | **Click** a link in a note | **Follow it**: clicking a `[[wikilink]]`, `![[embed]]`, or `[text](note)` in a rendered/source markdown-in-vault view opens that note in-viewer (same as `g` → select), keeping the `[` / `]` back/forward history. A click on plain text just focuses the pane |
+| **Click** a `#tag` in a note | **Filter the tree by that tag**: clicking a tag chip in the frontmatter **Properties** panel, or an inline `#tag` in the body, restricts the file tree to every vault note carrying that tag (Obsidian's `tag:` search; a parent tag also matches its nested children). The tree's title shows `▽ #tag`; press `Esc` (see [below](#clearing-a-tag-filter)) to restore the full tree. Only notes under the tree root are shown |
 | **Double-click** a folder | Expand / collapse it (same as `Enter`) |
 | **Double-click** a file | Open it in **zoom mode**: content full-screen (same as `Enter`); the editor is the `e` key |
 | **Wheel** over the content pane | Scroll it vertically; over the tree, move the selection |
@@ -137,6 +138,15 @@ sideways trackpad swipe. The `←` / `→` keys always scroll the content sidewa
 always scroll the tree sideways, regardless of terminal.
 
 The mouse-wheel step is configurable — see [`scroll_lines`](configuration.md).
+
+### Clearing a tag filter
+
+While a clicked-`#tag` filter is active (the tree shows only notes carrying that tag, titled
+`▽ #tag`), **`Esc`** clears it and restores the full tree. `Esc` is layered: it first drops a text
+selection, then a committed in-file search, **then the tag filter**, then un-zooms, then quits — so
+from a tag-filtered, zoomed pane it takes two `Esc`s to leave the filter and the zoom. There is no
+dedicated key binding to *apply* a tag filter (it is a mouse gesture); the keyboard equivalent for
+finding tagged notes is the `f` file finder or `/` search.
 
 ## Opening in an editor
 

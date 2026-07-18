@@ -128,3 +128,67 @@ keep delegating the actual markdown rendering to `glow`, and only re-color the s
     dark palette.
 - **Colours** live as constants at the top of `src/mdstyle.rs` (`LINK_FG`, the `Accent` fg/bg pairs)
   if you want to tweak the palette later.
+
+---
+
+## B — clickable tags filter the file explorer
+
+**What changed:** in a rendered markdown note inside an Obsidian vault, **left-clicking a `#tag`** now
+**filters the left-hand file tree** to every vault note carrying that tag — Obsidian's `tag:` search,
+but as a click. It works on both tag surfaces:
+- the **`#tag` chips** in the frontmatter **Properties** panel (toggle it with `p`), and
+- an **inline `#tag`** in the note body.
+
+While the filter is active the tree shows only the matching notes (with their parent folders,
+auto-expanded), and the tree's **top border title changes to `▽ #tag`** so you always see what's
+filtering it. Selecting a match renders it normally. **Press `Esc` to clear** the filter and get the
+full tree back. Built on the same reusable click hit-test as FIX 3 (`content_target_at` now returns a
+`ContentTarget::Tag` alongside `Link`), plus a new vault tag index (`src/tagindex.rs`) and a tree
+filter modelled on the existing changed-only filter.
+
+**How to test:**
+1. `cd ~/Workspace/herdr-file-viewer && cargo build --release`, then close/reopen the viewer pane.
+2. Open a note in your Brain vault that has `tags:` in its frontmatter — e.g. a note tagged
+   **`#ryoshi-games`** (or pick any tag you use). Press `p` if the Properties panel isn't showing.
+3. In the rendered `v` view, **click the `#ryoshi-games` chip** in the Properties table. The file tree
+   on the left should collapse to just the notes carrying that tag; the tree title shows `▽ #ryoshi-games`.
+   A one-line notice (`Filtering tree by #ryoshi-games — N notes · Esc to clear`) confirms the count.
+4. Click a matching note in the filtered tree — it opens/renders normally.
+5. **Press `Esc`** — the full tree comes back and the title reverts to the folder name.
+6. Also try an **inline** `#tag` in a note body (not just the Properties chip) — clicking it filters
+   the same way.
+7. Nested tags: if you have `#project/ryoshi`, clicking the parent `#project` reveals notes tagged
+   with any child (`#project/ryoshi`, `#project/foo`) too — Obsidian's behaviour.
+8. Edge check: click a tag whose only notes live *outside* the tree root, or a tag with no notes —
+   you get a notice and the tree is left unchanged (no empty tree).
+
+**Decisions / limitations:**
+- **Tree-root scope (the main limitation).** The tree is rooted at the viewer's root (the worktree /
+  cwd). The filter can only *show* notes **under that root** — a note elsewhere in the vault is found
+  by the index but not displayed (the notice still counts total matches). If you launch the viewer at
+  your **vault root**, every vault note is reachable and this is a non-issue; if you launch it in a
+  sub-folder, the filter is scoped to that sub-folder. This is inherent to a root-bounded tree, not a
+  bug.
+- **Nested tags.** A note tagged `#a/b/c` is indexed under the full tag **and** every ancestor prefix
+  (`a`, `a/b`, `a/b/c`), so clicking a parent tag matches its children — matching Obsidian's `tag:`.
+- **What counts as a tag.** Frontmatter `tags:` / `tag:` (YAML list or a space/comma-separated
+  scalar), plus inline body `#tag`s (`#` + letters/digits/`_`/`-`/`/`). A markdown heading (`# ` with
+  a space) and a purely numeric `#123` are **not** tags; inline tags inside fenced code blocks are
+  ignored. Tags match **case-insensitively**.
+- **Clear gesture.** `Esc` clears it. It's layered into the existing `Esc`/`q` back-out order:
+  text-selection → committed in-file search → **tag filter** → un-zoom → quit. So a zoomed, tag-filtered
+  pane takes two `Esc`s (one for the filter, one for the zoom). I deliberately did **not** add a new
+  remappable key/intent for this — it's a mouse-apply + `Esc`-clear feature — so there's no `[keys]`
+  entry and no `?`-overlay row for it. Jumping to an unrelated note (the `f` finder, a followed link)
+  also lifts the filter so the target stays reachable (same relax rule the changed-only filter uses).
+- **Standalone vs shared index.** The tag index (`src/tagindex.rs`) is **standalone to this feature**
+  and cached on the controller, rebuilt on a re-root/refresh. A separate `vault_index` may land later
+  (for a quick-switcher); I kept `tagindex` cohesive and small so it can either stay independent or be
+  folded into that later without entangling them now.
+- **Bonus fix.** While extending the shared click hit-test I found and fixed a pre-existing off-by-one
+  in `content_target_at` (it indexed the content lines with a 1-based row), so click-to-follow-links
+  (FIX 3) now reads the exact clicked line too. Covered by a new end-to-end click test.
+- **Tests:** unit tests for the tag parsing (`src/tagindex.rs`) and the tag-under-caret detection
+  (`src/controller/mouse.rs`), a tree-filter test (`tests/tree_filters.rs`), and an end-to-end
+  click→filter→`Esc` test (`tests/controller.rs`). Full suite green except the one known-flaky e2e
+  search test (fails on the base commit too).

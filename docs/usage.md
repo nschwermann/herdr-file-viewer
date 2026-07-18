@@ -108,6 +108,31 @@ holds a `.obsidian/` folder), you can follow its links to other notes without le
 (Rendered markdown shows `[[…]]` as literal text — `glow` doesn't know Obsidian syntax — so use `g`
 rather than clicking to follow a link.)
 
+## Filtering the tree by tag (Obsidian vaults)
+
+In a rendered note, **click a `#tag`** — a chip in the frontmatter [Properties panel](#obsidian-markdown-rendering)
+or an inline `#tag` in the body — to filter the file tree to **every vault note carrying that tag**,
+the way Obsidian's `tag:` search does. This is a mouse gesture (the viewer stays keyboard-first; the
+mouse is additive).
+
+- The tag index is built by a bounded, read-only walk of the containing vault (the nearest ancestor
+  holding `.obsidian/`). A note *carries* a tag if its frontmatter lists it under `tags:` / `tag:`,
+  **or** its body has an inline `#tag` — `#` followed by letters, digits, `_`, `-`, or `/` — that is
+  not inside a fenced code block. A markdown heading (`# ` with a space) and a purely numeric `#123`
+  are never tags, matching Obsidian.
+- **Nested tags** (`#project/ryoshi`) are matched by the full tag *and* every parent prefix, so
+  clicking `#project` reveals notes tagged `#project/ryoshi` too — again like Obsidian.
+- Tags are matched **case-insensitively**.
+- While the filter is active, the tree's title shows **`▽ #tag`** and the tree shows only the
+  matching notes (with their parent folders, auto-expanded). Selecting a match renders it normally.
+- **Clear the filter with `Esc`**, which restores the full tree. (`Esc` is layered — see
+  [keys](keys.md#clearing-a-tag-filter).) Jumping to an unrelated note (the `f` finder, a followed
+  link) also lifts the filter so the target is reachable.
+- **Scope.** The tree is rooted at the viewer's root (the worktree / cwd), so only matching notes
+  **under that root** are shown. When the vault root *is* the tree root, every vault note is
+  reachable; a note above the root cannot be shown. A refresh (`r`) or a worktree switch rebuilds the
+  index.
+
 ## Heading outline
 
 When you are viewing a markdown note, press `o` to open its **heading outline** — a centered,

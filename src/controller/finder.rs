@@ -279,6 +279,9 @@ impl Controller {
             // (the mirrors at controller.rs:166-168 drive those toggles).
             self.changed_only = self.tree.changed_only();
             self.hide_hidden = self.tree.hide_hidden();
+            // A jump to a note the tag filter didn't match relaxes the tree's tag filter — re-sync
+            // the mirror so the title indicator + Esc clear-gesture reset with it.
+            self.sync_tag_filter_after_reveal();
             // If the content pane isn't currently visible — the narrow, tree-only layout where the
             // last frame drew no content column (`content_width == 0`) — open the jumped-to file in
             // zoom mode so the user actually SEES the file they jumped to, instead of landing on a

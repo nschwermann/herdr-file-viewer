@@ -59,6 +59,7 @@ fn state(width: u16, focus: Focus) -> ViewState {
         annotation_indicators: AnnotationIndicatorsView::default(),
         root_name: "r".to_string(), // the fixture tree is rooted at /r
         branch: None,
+        tag_filter: None,
         prompt: None,
         content_title: Some("main.rs".to_string()),
         content_rendering: false,

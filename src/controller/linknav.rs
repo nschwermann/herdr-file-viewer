@@ -268,6 +268,9 @@ impl Controller {
         // later `c`/`.` toggle stays consistent (same as `confirm_finder`).
         self.changed_only = self.tree.changed_only();
         self.hide_hidden = self.tree.hide_hidden();
+        // A link/back/forward jump to a note outside an active tag filter relaxes the tree's tag
+        // filter — re-sync the mirror so the title indicator + Esc clear-gesture reset with it.
+        self.sync_tag_filter_after_reveal();
         // If the content pane isn't visible (narrow, tree-only layout), open the note zoomed so the
         // jumped-to file is actually on screen — mirrors the finder confirm.
         if self.content_width == 0 {

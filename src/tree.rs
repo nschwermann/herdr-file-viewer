@@ -46,6 +46,12 @@ pub struct TreeModel {
     show_ignored: bool,
     hide_hidden: bool,
     changed_only: bool,
+    /// Whether the tag filter is active: the tree is restricted to the note set in
+    /// `tag_filter` (plus their ancestor dirs), auto-revealed. Modelled on `changed_only`.
+    tag_only: bool,
+    /// The root-relative note paths a clicked `#tag` matched (the tag-filter set). Drives the
+    /// synthesized tag-only tree the way `changed_filter` drives the changed-only one.
+    tag_filter: BTreeSet<PathBuf>,
     /// Per-file status for tree markers (AC-7), keyed by root-relative path. Set
     /// independently of the filter (`set_status`) so the two can never overwrite each
     /// other.
@@ -63,6 +69,8 @@ impl TreeModel {
             show_ignored: false,
             hide_hidden: false,
             changed_only: false,
+            tag_only: false,
+            tag_filter: BTreeSet::new(),
             markers: BTreeMap::new(),
             changed_filter: BTreeMap::new(),
         }
@@ -90,6 +98,16 @@ impl TreeModel {
         self.clamp_cursor();
     }
 
+    /// Restrict the tree to a set of matching **notes** only — the clickable-tag filter. `notes`
+    /// are root-relative paths (the tag's matches under the tree root); the tree shows only those,
+    /// with their ancestor directories synthesized and auto-expanded (modelled on the changed-only
+    /// filter). `on == false` (with any `notes`) lifts the filter and restores the full tree.
+    pub fn set_tag_filter(&mut self, on: bool, notes: &BTreeSet<PathBuf>) {
+        self.tag_only = on;
+        self.tag_filter = notes.clone();
+        self.clamp_cursor();
+    }
+
     /// Set the per-file status used for tree markers (AC-7), independent of the filter.
     pub fn set_status(&mut self, status: &BTreeMap<PathBuf, Status>) {
         self.markers = status.clone();
@@ -105,6 +123,12 @@ impl TreeModel {
         self.changed_only
     }
 
+    /// Whether the tag filter is currently active on the tree. Exposed so the controller can
+    /// re-sync its mirror after `reveal` may have relaxed it (a jump to a note outside the filter).
+    pub fn tag_only(&self) -> bool {
+        self.tag_only
+    }
+
     /// Whether the hide-hidden filter is currently active on the tree. Exposed so the
     /// controller can re-sync its mirror field after `reveal` may have relaxed this flag.
     pub fn hide_hidden(&self) -> bool {
@@ -116,6 +140,12 @@ impl TreeModel {
     /// mode the tree is built from the changed-set itself (so deleted files — and files
     /// under a deleted directory — still appear, AC-6/AC-7), with every directory expanded.
     pub fn visible_nodes(&self) -> Vec<Node> {
+        // The tag filter takes precedence when active: it restricts the tree to the tag's matching
+        // notes (plus their ancestor dirs), the same synthesized-tree machinery the changed-only
+        // filter uses. Only one file-set filter shapes the tree at a time.
+        if self.tag_only {
+            return self.synthetic_nodes(&self.tag_filter);
+        }
         if self.changed_only {
             return self.changed_only_nodes();
         }
@@ -146,8 +176,17 @@ impl TreeModel {
     /// deletions — including whole deleted directories — are reviewable.
     fn changed_only_nodes(&self) -> Vec<Node> {
         let files: BTreeSet<PathBuf> = self.changed_filter.keys().cloned().collect();
+        self.synthetic_nodes(&files)
+    }
+
+    /// Synthesize a tree from a set of root-relative **file** paths: derive their ancestor
+    /// directories, then emit dirs-then-files depth-first with every directory auto-expanded. The
+    /// shared machinery behind both file-set filters — the changed-only filter (paths from the
+    /// changed-set, so deleted files/dirs still appear) and the tag filter (paths the clicked tag
+    /// matched). Built from the path set, not the filesystem, so a path need not exist on disk.
+    fn synthetic_nodes(&self, files: &BTreeSet<PathBuf>) -> Vec<Node> {
         let mut dirs: BTreeSet<PathBuf> = BTreeSet::new();
-        for rel in &files {
+        for rel in files {
             let mut ancestor = rel.parent();
             while let Some(p) = ancestor {
                 if p.as_os_str().is_empty() {
@@ -158,7 +197,7 @@ impl TreeModel {
             }
         }
         let mut out = Vec::new();
-        self.emit_synthetic(Path::new(""), 0, &dirs, &files, &mut out);
+        self.emit_synthetic(Path::new(""), 0, &dirs, files, &mut out);
         out
     }
 
@@ -319,7 +358,12 @@ impl TreeModel {
             }
             dir = d.parent();
         }
-        // Relax a filter only if it still hides the target after expansion.
+        // Relax a filter only if it still hides the target after expansion. The tag filter is
+        // checked first: a jump to a note the tag didn't match (a finder jump / a link follow)
+        // lifts the filter so the target is reachable, mirroring the changed-only relax below.
+        if self.tag_only && !self.visible_nodes().iter().any(|n| n.path == path) {
+            self.tag_only = false;
+        }
         if self.changed_only && !self.visible_nodes().iter().any(|n| n.path == path) {
             self.changed_only = false;
         }

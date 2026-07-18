@@ -31,6 +31,7 @@ mod linknav;
 mod mouse;
 mod outline;
 mod picker;
+mod tagfilter;
 
 use crate::annotation::AnnotationStore;
 use crate::finder::FinderState;
@@ -737,6 +738,15 @@ pub struct Controller {
     /// note it leaves onto this, and `]` pops one. Cleared whenever a fresh link is followed (a new
     /// branch abandons the old forward history) and on a re-root.
     nav_forward: Vec<PathBuf>,
+    /// The cached vault tag index (`tag -> notes`) backing the clickable-tag filter, built lazily on
+    /// the first tag click and reused until a re-root/refresh invalidates it (`None` ⇒ not built /
+    /// invalidated). Standalone to this feature; a future `vault_index` may subsume it. See
+    /// [`crate::tagindex`].
+    tag_index: Option<crate::tagindex::TagIndex>,
+    /// The tag currently filtering the tree (the clicked `#tag`, without its `#`), or `None` when no
+    /// tag filter is active. The source of truth for the tree-title indicator and the `Esc`
+    /// clear-gesture; mirrors the tree's `tag_only` flag, which `reveal` can relax.
+    active_tag: Option<String>,
     /// The effective key -> intent bindings the run loop decodes against (Slice B, T-6): the
     /// keybinding registry resolved with the config's `[keys]` overrides (config > default).
     /// Initialized to [`default_bindings`](crate::input::default_bindings) so a controller always
@@ -864,6 +874,8 @@ impl Controller {
             opener: None,
             nav_back: Vec::new(),
             nav_forward: Vec::new(),
+            tag_index: None,
+            active_tag: None,
             // Valid default bindings so the run loop can decode before (and if) `app::run` wires the
             // config's `[keys]` overrides via `set_keybindings`; tests inherit these unchanged.
             bindings: crate::input::default_bindings(),
@@ -1030,6 +1042,11 @@ impl Controller {
         // never re-reveal a note outside the freshly re-rooted tree.
         self.nav_back.clear();
         self.nav_forward.clear();
+        // The tag filter + its cached vault index belong to the old root/vault — drop both. The
+        // fresh TreeModel already starts with no tag filter; this clears the controller's mirror so
+        // the title indicator and `Esc` clear-gesture reset too.
+        self.active_tag = None;
+        self.tag_index = None;
         // The old root's rendered content is invalid under the new root — drop the displayed-file
         // path so the title falls back to a neutral label until the new selection's render lands
         //. `dispatch_render` below sets `content_rendering` and the loading placeholder.
@@ -1521,6 +1538,9 @@ impl Controller {
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             branch: self.current_branch.clone(),
+            // The active clickable-tag filter (the clicked `#tag`), surfaced as the tree-title
+            // indicator; `None` when no tag filter is active.
+            tag_filter: self.active_tag.clone(),
             prompt: self.bottom_line(),
             // the content pane's border title. `content_path` is the displayed content's
             // file (set by `poll` when a render lands, cleared by `clear_content`/re-root), so the
@@ -2406,6 +2426,11 @@ impl Controller {
             self.search = None;
             return Effects::redraw();
         }
+        // An active clickable-tag filter is lifted next — Esc/q "come out of the tag filter"
+        // (restoring the full tree) before they unzoom or quit, layered like the committed search.
+        if self.active_tag.is_some() {
+            return self.clear_tag_filter();
+        }
         if self.zoomed {
             self.zoomed = false;
             self.focus = Focus::Tree;
@@ -2595,6 +2620,16 @@ impl Controller {
     /// refresh: it re-renders the content (resetting its scroll), since the user asked for it.
     fn refresh(&mut self) -> Effects {
         self.refresh_git_state();
+        // Drop the cached vault tag index so it is rebuilt against the current vault. If a tag
+        // filter is active, recompute its match set now (against the rebuilt index) so the tree
+        // reflects the vault as of the refresh; drop the filter if the vault/note is gone.
+        self.tag_index = None;
+        if let Some(tag) = self.active_tag.clone() {
+            match self.tag_matches(&tag) {
+                Some(rel) if !rel.is_empty() => self.tree.set_tag_filter(true, &rel),
+                _ => self.clear_tag_filter_state(),
+            }
+        }
         self.dispatch_render();
         Effects::redraw()
     }

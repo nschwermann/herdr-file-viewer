@@ -126,6 +126,10 @@ pub struct ViewState {
     /// border. `None` outside a git repo or on a detached HEAD — in which case the bottom title is
     /// omitted entirely rather than showing a blank/placeholder branch (degrade gracefully).
     pub branch: Option<String>,
+    /// The active clickable-tag filter (the clicked `#tag`, without its `#`), or `None` when no tag
+    /// filter is active. When `Some`, the tree's top-border title shows the filter (in place of the
+    /// root name) so the restricted state is always visible; `Esc` clears it.
+    pub tag_filter: Option<String>,
     /// The content pane's border title, derived from the displayed content's file path (not the
     /// live tree cursor), so the title switches in lockstep with the body — it never shows a
     /// freshly-selected file's name before that file's content arrives. `None` while no
@@ -937,11 +941,17 @@ fn draw_tree(frame: &mut Frame, area: Rect, state: &ViewState) {
     // Top title = the root directory basename (mirroring how the content pane titles itself from
     // the selected node), sanitized (a repo dir name is untrusted, AC-27) and truncated to the
     // column so a long name can't break the border. Fall back to "Files" only when it is empty.
-    let name = sanitize_control(&state.root_name);
-    let title = if name.is_empty() {
-        "Files".to_string()
+    // While a clickable-tag filter is active, the title instead shows the filter (`▽ #tag`) so the
+    // restricted tree is always self-explaining; the `#tag` is sanitized + truncated the same way.
+    let title = if let Some(tag) = &state.tag_filter {
+        truncate_title(&format!("▽ #{}", sanitize_control(tag)), area.width)
     } else {
-        truncate_title(&name, area.width)
+        let name = sanitize_control(&state.root_name);
+        if name.is_empty() {
+            "Files".to_string()
+        } else {
+            truncate_title(&name, area.width)
+        }
     };
     let mut block = Block::bordered()
         .title(title)
